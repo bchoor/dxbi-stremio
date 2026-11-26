@@ -1259,7 +1259,8 @@
     stop = true;
   }
   function ensureQrLogin() {
-    const onIntro = /^#\/intro/.test(location.hash);
+    // the sign-in page (#/intro), or any page showing Stremio's email and password form
+    const onIntro = /^#\/intro/.test(location.hash) || !!document.querySelector('input[type="password"]');
     const btn = document.querySelector(".dxtv-qr-login");
     if (!onIntro) { if (btn) btn.remove(); return; }
     if (btn) return;
@@ -1268,6 +1269,9 @@
     b.textContent = "Sign in with your phone";
     b.addEventListener("click", () => qrLogin());
     document.body.append(b);
+    // (the remote starts on it: the quickest way in, and a button in a corner is easy to miss)
+    const at = document.activeElement;
+    if (!at || at === document.body || !(at.value || "").length) b.focus({ preventScroll: true });
   }
 
   window.addEventListener("hashchange", onRoute);
@@ -1278,7 +1282,7 @@
     resumePlayback();
     onRoute();
     ensureQrLogin();
-    new MutationObserver(ensureSettingsEntry).observe(document.body, { childList: true, subtree: true });
+    new MutationObserver(() => { ensureSettingsEntry(); ensureQrLogin(); }).observe(document.body, { childList: true, subtree: true });
   };
   if (document.readyState === "complete") start();
   else window.addEventListener("load", start);
