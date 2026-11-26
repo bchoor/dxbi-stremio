@@ -34,6 +34,7 @@ class TitleActivity : AppCompatActivity() {
     private var autoplay = false
     private val sources = mutableListOf<Source>()
     private var filter = "All"
+    private val toggles = mutableSetOf<String>()
     /** Only this add-on's sources (null: all of them) */
     private var addonFilter: String? = null
     private val counts = LinkedHashMap<String, Int>()
@@ -162,12 +163,29 @@ class TitleActivity : AppCompatActivity() {
         addonRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(2), dp(10), dp(2), 0) }
         zone.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipChildren = false; clipToPadding = false; addView(addonRow) })
         filterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(2), dp(8), dp(2), dp(8)) }
-        for (f in listOf("All", "4K", "1080p", "DV", "Atmos", "Instant")) {
+        // the resolution is one choice (All, 4K or 1080p); DV, Atmos and Instant are switches that
+        // all have to hold (DV and Atmos on: Dolby Vision sources with Atmos sound); All clears them
+        fun mark() {
+            for (i in 0 until filterRow.childCount) {
+                val c = filterRow.getChildAt(i)
+                val f = c.tag as String
+                c.isSelected = if (f in TOGGLES) f in toggles else f == filter && (f != "All" || toggles.isEmpty())
+            }
+        }
+        for (f in listOf("All", "4K", "1080p") + TOGGLES) {
             filterRow.addView(chip(f).apply {
-                isSelected = f == filter
-                setOnClickListener { filter = f; for (i in 0 until filterRow.childCount) filterRow.getChildAt(i).isSelected = filterRow.getChildAt(i) == this; render() }
+                tag = f
+                setOnClickListener {
+                    when {
+                        f in TOGGLES -> if (!toggles.remove(f)) toggles.add(f)
+                        f == "All" -> { filter = "All"; toggles.clear() }
+                        else -> filter = if (filter == f) "All" else f
+                    }
+                    mark(); render()
+                }
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
         }
+        mark()
         zone.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipChildren = false; clipToPadding = false; addView(filterRow) })
         val list = RecyclerView(this).apply {
             layoutManager = KeylineLayout(context)
@@ -475,11 +493,8 @@ class TitleActivity : AppCompatActivity() {
             (addonFilter == null || it.addon.name == addonFilter) && when (filter) {
                 "4K" -> it.res >= 2160
                 "1080p" -> it.res in 1080..2159
-                "DV" -> it.dv
-                "Atmos" -> it.audio.contains("Atmos")
-                "Instant" -> it.instant
                 else -> true
-            }
+            } && ("DV" !in toggles || it.dv) && ("Atmos" !in toggles || it.atmos) && ("Instant" !in toggles || it.instant)
         }
         adapter.notifyDataSetChanged()
         sources.firstOrNull()?.let { best -> setPill(playButton, null, playWord(), (listOf(best.resLabel, best.pictureLabel, best.audio).filter { it.isNotEmpty() && it != "SDR" }).joinToString(" · ")) }
@@ -516,6 +531,8 @@ class TitleActivity : AppCompatActivity() {
     }
 }
 
+private val TOGGLES = listOf("DV", "Atmos", "Instant")
+
 /**
  * The sources list, one card each:
  *   [  4K  ]  ⚡ INSTANT  EXTENDED  WEB      19.4 GB
@@ -543,7 +560,7 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
         }
         val main = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(ctx.dp(6), ctx.dp(8), ctx.dp(10), ctx.dp(8))
+            setPadding(ctx.dp(6), ctx.dp(5), ctx.dp(10), ctx.dp(5))
             isFocusable = true
             isClickable = true
             background = StateListDrawable().apply {
@@ -559,14 +576,14 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             background = round(Ui.SURFACE_2, 6, ctx)
-            setPadding(ctx.dp(4), ctx.dp(6), ctx.dp(4), ctx.dp(6))
+            setPadding(ctx.dp(3), ctx.dp(3), ctx.dp(3), ctx.dp(3))
         }
-        val res = ctx.label("", 15f, bold = true).apply { gravity = Gravity.CENTER }
+        val res = ctx.label("", 14f, bold = true).apply { gravity = Gravity.CENTER }
         val pic = ctx.label("", 10f, Ui.ACCENT, bold = true).apply { gravity = Gravity.CENTER }
         val snd = ctx.label("", 10f, Ui.TEXT, bold = true).apply { gravity = Gravity.CENTER; tag = "snd" }
         val atmos = ctx.label("Atmos", 9f, Ui.MUTED, bold = true).apply { gravity = Gravity.CENTER; tag = "atmos" }
         tile.addView(res); tile.addView(pic); tile.addView(snd); tile.addView(atmos)
-        tile.minimumHeight = ctx.dp(64)
+        tile.minimumHeight = ctx.dp(52)
         main.addView(tile, LinearLayout.LayoutParams(ctx.dp(68), LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(10) })
         main.tag = tile
 
@@ -584,9 +601,9 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
             marqueeRepeatLimit = -1
             isDuplicateParentStateEnabled = false
         }
-        words.addView(name, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, wrap).apply { topMargin = ctx.dp(5) })
+        words.addView(name, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, wrap).apply { topMargin = ctx.dp(3) })
         val from = ctx.label("", 11f, Ui.MUTED, bold = true)
-        words.addView(from, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, wrap).apply { topMargin = ctx.dp(3) })
+        words.addView(from, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, wrap).apply { topMargin = ctx.dp(2) })
         main.addView(words, LinearLayout.LayoutParams(0, wrap, 1f))
         row.addView(main, LinearLayout.LayoutParams(0, wrap, 1f))
 

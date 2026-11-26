@@ -585,7 +585,53 @@ class PlayerControls(
                 if (hdr.isNotEmpty()) lines += "TV can show " + hdr.joinToString(", ")
             }
         }
+        lines += ""
+        lines += "— THE TV —"
+        lines += deviceLines()
         return lines.joinToString("\n")
+    }
+
+    // ---- What Marquee costs the TV: memory, CPU, GPU ----
+    private var cpuTicks = -1L
+    private var pss = 0L
+    private var pssAt = 0L
+    private var cpuAt = 0L
+
+    private fun deviceLines(): List<String> {
+        val out = mutableListOf<String>()
+        val am = activity.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val mi = android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+        val t = android.os.SystemClock.elapsedRealtime()
+        if (t - pssAt > 3000) { pss = android.os.Debug.getPss() * 1024L; pssAt = t } // (slow to read: every 3 s)
+        val mine = pss // this app's own share (PSS)
+        val total = mi.totalMem
+        val free = mi.availMem
+        val others = (total - free - mine).coerceAtLeast(0)
+        fun mb(b: Long) = "%,d MB".format(b / 1_048_576)
+        // a bar of 30: Marquee ■, everything else ▒, free ·
+        val n = 30
+        val a = (mine * n / total).toInt().coerceIn(if (mine > 0) 1 else 0, n)
+        val b = (others * n / total).toInt().coerceIn(0, n - a)
+        out += "Memory [" + "■".repeat(a) + "▒".repeat(b) + "·".repeat(n - a - b) + "]"
+        out += "  ■ Marquee ${mb(mine)} · ▒ Android and other apps ${mb(others)} · free ${mb(free)} of ${mb(total)}"
+        // CPU: this app's share of all cores since the last look (the TV keeps other apps' figures private)
+        try {
+            val f = java.io.File("/proc/self/stat").readText().substringAfterLast(')').trim().split(' ')
+            val ticks = f[11].toLong() + f[12].toLong() // utime + stime
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (cpuTicks >= 0 && now > cpuAt) {
+                val hz = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK).coerceAtLeast(1)
+                val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+                val pct = (ticks - cpuTicks) * 1000.0 / hz / (now - cpuAt) * 100 / cores
+                out += "CPU Marquee %.0f%% of %d cores".format(pct, cores)
+            } else out += "CPU measuring…"
+            cpuTicks = ticks; cpuAt = now
+        } catch (_: Exception) { out += "CPU not readable" }
+        // GPU: Mali reports its load in sysfs, where the TV lets apps read it
+        val gpu = listOf("/sys/kernel/gpu/gpu_busy", "/sys/class/misc/mali0/device/utilization", "/sys/devices/platform/mali/utilization", "/proc/mali/utilization")
+            .firstNotNullOfOrNull { path -> try { java.io.File(path).readText().trim().takeIf { it.isNotEmpty() } } catch (_: Exception) { null } }
+        out += if (gpu != null) "GPU busy ${gpu.filter { it.isDigit() }.take(3)}%" else "GPU load not readable on this TV"
+        return out
     }
 
     private companion object {
