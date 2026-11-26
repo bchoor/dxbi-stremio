@@ -77,7 +77,7 @@ class PlayerControls(
         }
     }
 
-    private val buttons = listOf(R.id.ctl_play, R.id.ctl_rewind, R.id.ctl_forward, R.id.ctl_next, R.id.ctl_stats, R.id.ctl_picture, R.id.ctl_speed, R.id.ctl_subtitles, R.id.ctl_audio, R.id.ctl_party)
+    private val buttons = listOf(R.id.ctl_play, R.id.ctl_restart, R.id.ctl_rewind, R.id.ctl_forward, R.id.ctl_next, R.id.ctl_stats, R.id.ctl_picture, R.id.ctl_speed, R.id.ctl_subtitles, R.id.ctl_audio, R.id.ctl_party)
         .map { activity.findViewById<View>(it) }
 
     override val visible get() = root.visibility == View.VISIBLE
@@ -87,6 +87,7 @@ class PlayerControls(
         line.accent = accent
         click(R.id.ctl_back) { leave(false) }
         click(R.id.ctl_play) { exo.playWhenReady = !exo.playWhenReady; paint() }
+        click(R.id.ctl_restart) { exo.seekTo(0L); exo.play(); paint() }
         click(R.id.ctl_rewind) { seek(-1); paint() }
         click(R.id.ctl_forward) { seek(+1); paint() }
         click(R.id.ctl_next) { leave(true) }
