@@ -112,7 +112,7 @@ class SearchActivity : AppCompatActivity() {
         }
         var found = 0
         for ((c, answer) in asked) {
-            val items = answer.await() ?: continue
+            val items = answer.await()?.let { fillCaptions(it) } ?: continue
             if (items.isEmpty()) continue
             var title = typeName(c.type)
             if (rows.rows.any { it.title == title }) title = "$title · ${c.addon.name}"
@@ -121,6 +121,19 @@ class SearchActivity : AppCompatActivity() {
             found += items.size
         }
         status.text = if (found == 0) "Nothing found for “$q”" else ""
+    }
+
+    /** Search answers often leave out the year and IMDb rating shown under each poster: read them from the title's details */
+    private suspend fun fillCaptions(items: List<Item>): List<Item> {
+        val scope = lifecycleScope
+        return items.mapIndexed { i, it ->
+            if ((it.year.isNotEmpty() && it.rating.isNotEmpty()) || i >= 30) scope.async { it }
+            else scope.async {
+                val m = withTimeoutOrNull(5_000) { Session.meta(it.type, it.id) } ?: return@async it
+                val full = Item.from(m)
+                it.copy(year = it.year.ifEmpty { full.year }, rating = it.rating.ifEmpty { full.rating })
+            }
+        }.map { it.await() }
     }
 
     private fun goToResults() {
