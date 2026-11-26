@@ -187,6 +187,11 @@
                     android:contentDescription="Audio"
                     android:src="@drawable/ic_audio" />
                 <ImageButton
+                    android:id="@+id/ctl_external"
+                    style="@style/PlayerButton"
+                    android:contentDescription="Open in another player"
+                    android:src="@drawable/ic_external" />
+                <ImageButton
                     android:id="@+id/ctl_party"
                     style="@style/PlayerButton"
                     android:contentDescription="Watch party"

@@ -77,7 +77,7 @@ class PlayerControls(
         }
     }
 
-    private val buttons = listOf(R.id.ctl_play, R.id.ctl_restart, R.id.ctl_rewind, R.id.ctl_forward, R.id.ctl_next, R.id.ctl_stats, R.id.ctl_picture, R.id.ctl_speed, R.id.ctl_subtitles, R.id.ctl_audio, R.id.ctl_party)
+    private val buttons = listOf(R.id.ctl_play, R.id.ctl_restart, R.id.ctl_rewind, R.id.ctl_forward, R.id.ctl_next, R.id.ctl_stats, R.id.ctl_picture, R.id.ctl_speed, R.id.ctl_subtitles, R.id.ctl_audio, R.id.ctl_external, R.id.ctl_party)
         .map { activity.findViewById<View>(it) }
 
     override val visible get() = root.visibility == View.VISIBLE
@@ -98,6 +98,7 @@ class PlayerControls(
         click(R.id.ctl_subtitles) { showTracks(it, C.TRACK_TYPE_TEXT, "Subtitles") }
         click(R.id.ctl_audio) { showTracks(it, C.TRACK_TYPE_AUDIO, "Audio") }
         click(R.id.ctl_party) { showParty(it) }
+        click(R.id.ctl_external) { openElsewhere() }
         // Phones: a tap shows or hides them, and the bar can be touched
         playerView.setOnClickListener { if (visible) hide() else show() }
         root.setOnClickListener { hide() }
@@ -362,6 +363,24 @@ class PlayerControls(
         }
         if (number == 0 && type == C.TRACK_TYPE_AUDIO) row("No other audio", false) {}
         focusFirst()
+    }
+
+    /** Hands the video, and where it is, to another player (VLC or whichever you pick) */
+    private fun openElsewhere() {
+        val stream = org.json.JSONObject(activity.intent.getStringExtra(PlayerActivity.EXTRA_STREAM) ?: "{}")
+        val url = stream.optString("url")
+        if (url.isEmpty()) return
+        exo.playWhenReady = false
+        paint()
+        val view = android.content.Intent(android.content.Intent.ACTION_VIEW)
+            .setDataAndType(android.net.Uri.parse(url), "video/*")
+            .putExtra("title", stream.optString("title"))
+            .putExtra("position", exo.currentPosition) // VLC and MX Player start from here
+            .putExtra("from_start", false)
+        try { activity.startActivity(android.content.Intent.createChooser(view, "Play with")) }
+        catch (_: android.content.ActivityNotFoundException) {
+            android.widget.Toast.makeText(activity, "No other video player is installed", android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun audioKind(mime: String?) = when (mime) {

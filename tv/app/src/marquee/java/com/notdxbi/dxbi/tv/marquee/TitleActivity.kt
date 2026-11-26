@@ -55,7 +55,7 @@ class TitleActivity : AppCompatActivity() {
     private lateinit var sourcesStatus: TextView
     private lateinit var filterRow: LinearLayout
     private lateinit var addonRow: LinearLayout
-    private val adapter = SourcesAdapter({ play(it) }, { Play.inVlc(this, it, playTitle()) })
+    private val adapter = SourcesAdapter { play(it) }
     private var trailerYt: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -319,7 +319,6 @@ class TitleActivity : AppCompatActivity() {
 
     private fun playWord() = if (resumeMs() > 30_000) "Resume" else "Play"
 
-    private fun playTitle() = if (episodeLabel.isEmpty()) item.name else "${item.name} · $episodeLabel"
 
     private fun play(source: Source) {
         lifecycleScope.launch { Play.start(this@TitleActivity, item, videoId, episodeLabel, source, Session.addons, resumeMs()) }
@@ -347,9 +346,9 @@ class TitleActivity : AppCompatActivity() {
  * The sources list, one card each:
  *   [ 4K ]  DD+ ATMOS ✓  WEB  ⚡ INSTANT        19.4 GB
  *   [ DV ]  Dune.Part.Two.2024.2160p.WEB-DL…
- *           Torrentio · RD+                     [VLC]
+ *           Torrentio · RD+   (another player: from the player's own controls)
  */
-class SourcesAdapter(private val onPlay: (Source) -> Unit, private val onVlc: (Source) -> Unit) : RecyclerView.Adapter<SourcesAdapter.Holder>() {
+class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapter<SourcesAdapter.Holder>() {
     var items: List<Source> = emptyList()
 
     init { setHasStableIds(true) }
@@ -357,7 +356,7 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit, private val onVlc: (S
     override fun getItemCount() = items.size
 
     class Holder(view: View, val main: LinearLayout, val res: TextView, val pic: TextView, val badges: LinearLayout, val size: TextView,
-                 val name: TextView, val from: TextView, val vlc: TextView) : RecyclerView.ViewHolder(view)
+                 val name: TextView, val from: TextView) : RecyclerView.ViewHolder(view)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val ctx = parent.context
@@ -409,21 +408,8 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit, private val onVlc: (S
         main.addView(words, LinearLayout.LayoutParams(0, wrap, 1f))
         row.addView(main, LinearLayout.LayoutParams(0, wrap, 1f))
 
-        // opens this source in VLC instead of the built-in player
-        val vlc = ctx.label("VLC", 11f, bold = true).apply {
-            gravity = Gravity.CENTER
-            contentDescription = "Play in VLC"
-            setPadding(ctx.dp(8), ctx.dp(6), ctx.dp(8), ctx.dp(6))
-            background = StateListDrawable().apply {
-                addState(intArrayOf(android.R.attr.state_focused), round(Color.WHITE, 14, ctx))
-                addState(intArrayOf(), round(Ui.BUTTON, 14, ctx))
-            }
-            setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Ui.BG, Color.WHITE)))
-            focusGrow(1.08f)
-        }
-        row.addView(vlc, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = ctx.dp(6) })
         main.onFocusChangeListener = View.OnFocusChangeListener { _, has -> name.isSelected = has }
-        return Holder(row, main, res, pic, badges, size, name, from, vlc)
+        return Holder(row, main, res, pic, badges, size, name, from)
     }
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
@@ -440,7 +426,6 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit, private val onVlc: (S
         holder.from.text = s.from
         holder.main.contentDescription = "${s.resLabel} ${s.pictureLabel} ${s.audio} ${s.from}"
         holder.main.setOnClickListener { onPlay(s) }
-        holder.vlc.setOnClickListener { onVlc(s) }
     }
 }
 
