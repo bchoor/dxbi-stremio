@@ -41,6 +41,7 @@ object Trailer {
     suspend fun streams(ytId: String): Streams? = withContext(Dispatchers.IO) {
         withTimeoutOrNull(20_000) {
             try {
+                lastError = ""
                 if (!ready) { NewPipe.init(Net); ready = true }
                 val info = StreamInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=$ytId")
                 val progressive = { d: DeliveryMethod -> d == DeliveryMethod.PROGRESSIVE_HTTP }
@@ -56,9 +57,18 @@ object Trailer {
                     .firstOrNull()
                 if (video != null && audio != null) return@withTimeoutOrNull Streams(video.content, audio.content, "${video.height}p")
                 // a stream with picture and sound together (360p) when the separate ones aren't there
-                val muxed = info.videoStreams.filter { it.isUrl && progressive(it.deliveryMethod) }.maxByOrNull { it.height } ?: return@withTimeoutOrNull null
+                android.util.Log.i("MarqueeTrailer", "$ytId: videoOnly=${info.videoOnlyStreams.size} audio=${info.audioStreams.size} muxed=${info.videoStreams.size}")
+                val muxed = info.videoStreams.filter { it.isUrl && progressive(it.deliveryMethod) }.maxByOrNull { it.height }
+                    ?: run { lastError = "no playable streams"; return@withTimeoutOrNull null }
                 Streams(muxed.content, null, "${muxed.height}p")
-            } catch (_: Throwable) { null }
-        }
+            } catch (e: Throwable) {
+                android.util.Log.w("MarqueeTrailer", "couldn't read $ytId: $e", e)
+                lastError = e.toString().take(120)
+                null
+            }
+        } ?: run { if (lastError.isEmpty()) lastError = "timed out"; null }
     }
+
+    /** Why the last lookup failed, for the log and the toast */
+    @Volatile var lastError = ""
 }

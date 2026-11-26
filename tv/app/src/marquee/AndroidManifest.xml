@@ -65,5 +65,12 @@
             android:exported="false"
             android:screenOrientation="sensorLandscape"
             android:windowSoftInputMode="stateVisible|adjustNothing" />
+
+        <activity
+            android:name="com.notdxbi.dxbi.tv.marquee.TrailerActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:screenOrientation="sensorLandscape" />
     </application>
 </manifest>

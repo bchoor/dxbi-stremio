@@ -113,10 +113,12 @@ object Play : PlaybackBus.Listener {
             activity.startActivity(Intent(activity, PlayerActivity::class.java).putExtra(PlayerActivity.EXTRA_STREAM, stream.toString()))
             return@launch
         }
-        youtubeApp(activity, ytId)
+        // YouTube's own player, inside Marquee
+        android.util.Log.w("MarqueeTrailer", "falling back to the embedded player: ${Trailer.lastError}")
+        activity.startActivity(Intent(activity, TrailerActivity::class.java).putExtra("yt", ytId))
     }
 
-    private fun youtubeApp(activity: Activity, ytId: String) {
+    fun youtubeApp(activity: Activity, ytId: String) {
         try { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$ytId"))) }
         catch (_: ActivityNotFoundException) {
             try { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$ytId"))) }
