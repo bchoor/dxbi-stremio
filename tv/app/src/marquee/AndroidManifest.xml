@@ -18,7 +18,7 @@
     <application
         android:name="com.notdxbi.dxbi.tv.marquee.MarqueeApp"
         android:banner="@drawable/marquee_banner"
-        android:icon="@drawable/marquee_icon"
+        android:icon="@mipmap/marquee_launcher"
         android:label="@string/marquee_name"
         android:theme="@style/Theme.Marquee"
         tools:replace="android:banner,android:icon,android:label,android:theme">

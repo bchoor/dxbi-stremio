@@ -53,6 +53,7 @@ class HomeActivity : AppCompatActivity() {
     private var pictureJob: Job? = null
     private var focusedOnce = false
     private var railOpen = false
+    private var splash: Splash? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,9 +63,9 @@ class HomeActivity : AppCompatActivity() {
         val picture = FrameLayout(this)
         backdrop = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         picture.addView(backdrop, match())
-        picture.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(Ui.BG, 0x000B0C0F)) },
+        picture.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(Ui.BG, 0x000B1026)) },
             FrameLayout.LayoutParams(dp(280), FrameLayout.LayoutParams.MATCH_PARENT, Gravity.START))
-        picture.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Ui.BG, 0x000B0C0F)) },
+        picture.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Ui.BG, 0x000B1026)) },
             FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(160), Gravity.BOTTOM))
         root.addView(picture, FrameLayout.LayoutParams(dp(660), dp(372), Gravity.TOP or Gravity.END))
 
@@ -90,6 +91,8 @@ class HomeActivity : AppCompatActivity() {
         root.addView(dim, match())
         rail = menu()
         root.addView(rail, FrameLayout.LayoutParams(dp(RAIL_SHUT), FrameLayout.LayoutParams.MATCH_PARENT, Gravity.START))
+        // the animated splash covers Home until its first row is in
+        if (savedInstanceState == null && Api.authKey != null) splash = Splash(this).also { root.addView(it.view, match()); it.start() }
         setContentView(root)
 
         root.viewTreeObserver.addOnGlobalFocusChangeListener { _, now -> openRail(now != null && inside(rail, now)) }
@@ -146,8 +149,8 @@ class HomeActivity : AppCompatActivity() {
         if (open == railOpen) return
         railOpen = open
         rail.layoutParams = rail.layoutParams.apply { width = dp(if (open) RAIL_OPEN else RAIL_SHUT) }
-        rail.background = if (open) GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xFA0B0C0F.toInt(), 0xEE0B0C0F.toInt(), 0x000B0C0F))
-            else GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xE60B0C0F.toInt(), 0x000B0C0F))
+        rail.background = if (open) GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xFA0B1026.toInt(), 0xEE0B1026.toInt(), 0x000B1026))
+            else GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xE60B1026.toInt(), 0x000B1026))
         dim.visibility = if (open) View.VISIBLE else View.GONE
         for ((_, item) in railItems) item.getChildAt(1).visibility = if (open) View.VISIBLE else View.GONE
         paintRail()
@@ -241,6 +244,7 @@ class HomeActivity : AppCompatActivity() {
         val addons = try { Api.addons() } catch (e: Exception) {
             if (Api.authKey == null) { signIn(); return@launch }
             status.text = "Couldn't reach Stremio (${e.message}). Open Home again to retry."
+            splash?.done()
             loaded = false
             return@launch
         }
@@ -275,6 +279,7 @@ class HomeActivity : AppCompatActivity() {
             firstFocus()
         }
         if (allRows.isEmpty()) status.text = "None of your add-ons had a catalog to show"
+        splash?.done()
     }
 
     private suspend fun refreshLibrary() {
@@ -299,6 +304,7 @@ class HomeActivity : AppCompatActivity() {
     }
 
     private fun firstFocus() {
+        if (rows.rows.isNotEmpty()) splash?.done()
         if (focusedOnce || rows.rows.isEmpty()) return
         focusedOnce = true
         rowsView.postDelayed({ focusRow(0) }, 150)

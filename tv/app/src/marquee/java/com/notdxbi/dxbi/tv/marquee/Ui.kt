@@ -18,12 +18,13 @@ import com.notdxbi.dxbi.tv.R
 
 /** Marquee's look, in one place */
 object Ui {
-    const val BG = 0xFF0B0C0F.toInt()
-    const val SURFACE = 0xFF16181D.toInt()
-    const val SURFACE_2 = 0xFF23262D.toInt()
+    const val BG = 0xFF0B1026.toInt() // brand navy
+    const val SURFACE = 0xFF141A36.toInt()
+    const val SURFACE_2 = 0xFF1F2647.toInt()
     const val TEXT = 0xFFF2F3F5.toInt()
     const val MUTED = 0xFFA3A8B3.toInt()
-    const val ACCENT = 0xFFF5B544.toInt()
+    const val ACCENT = 0xFFFF8A3D.toInt() // brand tangerine
+    const val PEACH = 0xFFFFD9C2.toInt()
     const val GO = 0xFF6FE3BC.toInt()
     const val GO_BG = 0xFF173A30.toInt()
     const val WARN = 0xFFF5C46A.toInt()
@@ -67,8 +68,19 @@ fun View.focusGrow(scale: Float = 1.06f) {
     isFocusable = true
     isClickable = true
     setOnFocusChangeListener { v, has ->
+        if (has) v.unclipParents()
         v.animate().scaleX(if (has) scale else 1f).scaleY(if (has) scale else 1f).setDuration(120).start()
         v.elevation = if (has) v.dp(6).toFloat() else 0f
+    }
+}
+
+/** Lets a focused view grow past its parents' edges instead of being cut off */
+fun View.unclipParents() {
+    var p = parent
+    while (p is ViewGroup) {
+        p.clipChildren = false
+        p.clipToPadding = false
+        p = p.parent
     }
 }
 

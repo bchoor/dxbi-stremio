@@ -46,6 +46,8 @@ class TitleActivity : AppCompatActivity() {
     private lateinit var title: TextView
     private lateinit var metaLine: TextView
     private lateinit var desc: TextView
+    private lateinit var logo: ImageView
+    private lateinit var facts: TextView
     private lateinit var playButton: LinearLayout
     private lateinit var trailerButton: LinearLayout
     private lateinit var watchButton: LinearLayout
@@ -87,17 +89,23 @@ class TitleActivity : AppCompatActivity() {
         val root = FrameLayout(this).apply { setBackgroundColor(Ui.BG) }
         backdrop = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0.6f }
         root.addView(backdrop, match())
-        root.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF20B0C0F.toInt(), 0x990B0C0F.toInt())) }, match())
+        root.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF20B1026.toInt(), 0x990B1026.toInt())) }, match())
 
         val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false; setPadding(dp(40), dp(24), dp(24), dp(20)) }
         val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
         left.addView(iconButton(R.drawable.ic_mq_back, "Back").apply { setOnClickListener { finish() } }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        // the title's own logo art when it has one (as Netflix shows), else its name
+        logo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_START; adjustViewBounds = true; visibility = View.GONE }
+        left.addView(logo, LinearLayout.LayoutParams(dp(380), dp(96)).apply { topMargin = dp(16) })
         title = label("", 32f, bold = true, lines = 2)
         left.addView(title, LinearLayout.LayoutParams(dp(500), LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) })
         metaLine = label("", 13f, Ui.MUTED)
         left.addView(metaLine, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         desc = label("", 14f, lines = 4).apply { setLineSpacing(0f, 1.15f) }
         left.addView(desc, LinearLayout.LayoutParams(dp(500), LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+        // Starring, Director, Writers, Country, Awards
+        facts = label("", 12f, Ui.MUTED, lines = 5).apply { setLineSpacing(0f, 1.25f) }
+        left.addView(facts, LinearLayout.LayoutParams(dp(500), LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
         val gap = { LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) } }
@@ -163,6 +171,27 @@ class TitleActivity : AppCompatActivity() {
             description = meta.optString("description").ifEmpty { item.description })
         title.text = name
         desc.text = item.description
+        val logoUrl = meta.optString("logo")
+        if (logoUrl.startsWith("http")) logo.load(logoUrl) {
+            listener(onSuccess = { _, _ -> logo.visibility = View.VISIBLE; title.visibility = View.GONE })
+        }
+        facts.text = android.text.SpannableStringBuilder().apply {
+            fun line(name: String, value: String) {
+                if (value.isEmpty()) return
+                if (length > 0) append("\n")
+                val start = length
+                append(name).append("  ")
+                setSpan(android.text.style.ForegroundColorSpan(Ui.TEXT), start, length, 0)
+                setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), start, length, 0)
+                append(value)
+            }
+            fun names(key: String, n: Int) = meta.optJSONArray(key).strings().take(n).joinToString(", ")
+            line("Starring", names("cast", 5))
+            line("Director", names("director", 3))
+            line("Writers", names("writer", 3))
+            line("Country", meta.optString("country").takeIf { it != "null" }.orEmpty())
+            line("Awards", meta.optString("awards").takeIf { it != "null" && it != "N/A" }.orEmpty())
+        }
         metaLine.text = listOf(
             meta.optString("releaseInfo", meta.optString("year")),
             meta.optString("runtime"),
@@ -276,7 +305,7 @@ class TitleActivity : AppCompatActivity() {
         addonRow.removeAllViews()
         val names = listOf<String?>(null) + counts.keys
         for (n in names) {
-            addonRow.addView(chip(if (n == null) "All add-ons" else "$n ${counts[n]}").apply {
+            addonRow.addView(chip(if (n == null) "All" else "$n ${counts[n]}").apply {
                 isSelected = n == addonFilter
                 setOnClickListener {
                     addonFilter = n
@@ -355,7 +384,7 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
     override fun getItemId(position: Int) = items[position].key.hashCode().toLong()
     override fun getItemCount() = items.size
 
-    class Holder(view: View, val main: LinearLayout, val res: TextView, val pic: TextView, val badges: LinearLayout, val size: TextView,
+    class Holder(view: View, val main: LinearLayout, val stripe: View, val res: TextView, val pic: TextView, val badges: LinearLayout, val size: TextView,
                  val name: TextView, val from: TextView) : RecyclerView.ViewHolder(view)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
@@ -368,7 +397,7 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
         }
         val main = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(ctx.dp(8), ctx.dp(8), ctx.dp(10), ctx.dp(8))
+            setPadding(ctx.dp(6), ctx.dp(8), ctx.dp(10), ctx.dp(8))
             isFocusable = true
             isClickable = true
             background = StateListDrawable().apply {
@@ -376,6 +405,9 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
                 addState(intArrayOf(), round(Color.TRANSPARENT, 8, ctx))
             }
         }
+        // a strip in the provider's colour (Torrentio blue, Easynews green)
+        val stripe = View(ctx)
+        main.addView(stripe, LinearLayout.LayoutParams(ctx.dp(4), ctx.dp(52)).apply { marginEnd = ctx.dp(8) })
         // the tile: resolution, and the picture under it
         val tile = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -403,13 +435,13 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
             isDuplicateParentStateEnabled = false
         }
         words.addView(name, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, wrap).apply { topMargin = ctx.dp(5) })
-        val from = ctx.label("", 10f, Ui.MUTED)
+        val from = ctx.label("", 11f, Ui.MUTED, bold = true)
         words.addView(from, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, wrap).apply { topMargin = ctx.dp(3) })
         main.addView(words, LinearLayout.LayoutParams(0, wrap, 1f))
         row.addView(main, LinearLayout.LayoutParams(0, wrap, 1f))
 
         main.onFocusChangeListener = View.OnFocusChangeListener { _, has -> name.isSelected = has }
-        return Holder(row, main, res, pic, badges, size, name, from)
+        return Holder(row, main, stripe, res, pic, badges, size, name, from)
     }
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
@@ -423,7 +455,9 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
         for ((text, kind) in s.badges()) holder.badges.addView(ctx.badge(text, kind), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(4) })
         holder.size.text = s.size
         holder.name.text = s.fileName.ifEmpty { s.name }
-        holder.from.text = s.from
+        holder.stripe.background = round(s.providerColor, 2, ctx)
+        holder.from.text = s.provider.uppercase()
+        holder.from.setTextColor(s.providerColor)
         holder.main.contentDescription = "${s.resLabel} ${s.pictureLabel} ${s.audio} ${s.from}"
         holder.main.setOnClickListener { onPlay(s) }
     }

@@ -121,6 +121,26 @@ class Source(val addon: Addon, val json: JSONObject) {
         if (first.isEmpty() || first.equals(addon.name, true)) addon.name else "${addon.name} · ${first.take(28)}"
     }
 
+    /** Where it really comes from: Torrentio, or the service an add-on like AIOStreams got it from */
+    val provider: String = run {
+        val service = listOf("Easynews" to "easynews", "TorBox" to "torbox", "Real-Debrid" to "real-?debrid|\\[rd", "AllDebrid" to "alldebrid|\\[ad",
+            "Premiumize" to "premiumize|\\[pm", "Debrid-Link" to "debrid-?link|\\[dl", "Usenet" to "usenet|nzb")
+            .firstOrNull { Regex(it.second, RegexOption.IGNORE_CASE).containsMatchIn(name) }?.first
+        when {
+            addon.name.contains("torrentio", true) -> if (service != null && service != "Easynews") "Torrentio · $service" else "Torrentio"
+            service != null -> service
+            else -> addon.name
+        }
+    }
+
+    /** One colour per provider, so they can be told apart at a glance */
+    val providerColor: Int = when {
+        provider.startsWith("Torrentio") -> 0xFF5AA9FF.toInt()
+        provider.startsWith("Easynews") -> 0xFF6FE3BC.toInt()
+        provider.startsWith("TorBox") -> 0xFFC79BFF.toInt()
+        else -> 0xFFFFD9C2.toInt()
+    }
+
     /** What the player keeps this source's audio choice under */
     val key: String = json.optString("infoHash").takeIf { it.isNotEmpty() }?.let { "$it/${json.optInt("fileIdx", 0)}" }
         ?: fileName.ifEmpty { url.substringBefore('?') }

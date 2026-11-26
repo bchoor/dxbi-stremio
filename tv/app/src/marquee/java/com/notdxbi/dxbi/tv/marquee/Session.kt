@@ -145,6 +145,7 @@ class CardsAdapter(private val items: List<Item>, private val wide: Boolean, pri
         }
         holder.card.setOnClickListener { onOpen(item) }
         holder.card.setOnFocusChangeListener { v, has ->
+            if (has) v.unclipParents()
             v.animate().scaleX(if (has) 1.08f else 1f).scaleY(if (has) 1.08f else 1f).setDuration(120).start()
             v.elevation = if (has) v.dp(6).toFloat() else 0f
             if (has) onFocus(item)
