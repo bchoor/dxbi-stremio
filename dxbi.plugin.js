@@ -4340,6 +4340,10 @@
     },
   };
 
+  // When the remote was last pressed (the source list leaves the viewer's own choices alone)
+  let lastKeyAt = 0;
+  document.addEventListener("keydown", () => { lastKeyAt = Date.now(); }, true);
+
   const streamTools = {
     cache: new WeakMap(),
     state: (() => {
@@ -4397,8 +4401,12 @@
       // TV: a new list starts with the remote on its top source (the best match), not on the
       // filters above it; once only, and not if the remote is already somewhere in the list or bar
       if (IN_TV && this.focusedList !== list) {
+        if (this.seenList !== list) { this.seenList = list; this.seenAt = Date.now(); }
         const at = document.activeElement;
-        if (!at || at === document.body || !(list.contains(at) || bar.contains(at) || at.closest("input, textarea"))) {
+        // (the page puts the remote on the first filter by itself: that isn't the viewer's choice
+        // until they've pressed a key since this list appeared)
+        const chose = lastKeyAt > this.seenAt;
+        if (!at || at === document.body || !(list.contains(at) || (bar.contains(at) && chose) || at.closest("input, textarea"))) {
           const first = items
             .filter((el) => !el.hasAttribute("data-dx-hide"))
             .map((el, i) => [el, i, Number(el.style.order) || 0])
