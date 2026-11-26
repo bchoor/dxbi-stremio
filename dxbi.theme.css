@@ -4213,6 +4213,15 @@ html[data-dx-rows] [class*="streams-list-container"] [class*="stream-placeholder
     white-space: nowrap;
 }
 
+/* The selected source shows its whole file name, so two releases with the same title and year
+   (an Indian and a US film, say) can be told apart */
+[data-dxv]:focus .dxv-main u,
+[data-dxv]:focus-within .dxv-main u {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    color: var(--dx-text-2);
+}
+
 .dxv-best {
     display: none;
     font: 800 0.68rem/1 Inter, system-ui, sans-serif !important;

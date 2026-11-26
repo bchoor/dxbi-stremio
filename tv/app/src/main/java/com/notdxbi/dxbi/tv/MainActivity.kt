@@ -69,7 +69,8 @@ class MainActivity : AppCompatActivity() {
         if (!webViewIsRecentEnough()) return
 
         // Debug builds can be inspected from a computer (chrome://inspect)
-        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) WebView.setWebContentsDebuggingEnabled(true)
+        // (this fork: the page can always be profiled over adb, which already needs USB debugging on)
+        WebView.setWebContentsDebuggingEnabled(true)
         web = WebView(this)
         val root = FrameLayout(this)
         root.addView(web, webSize())

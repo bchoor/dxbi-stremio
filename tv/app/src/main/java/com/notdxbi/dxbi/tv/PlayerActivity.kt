@@ -59,7 +59,8 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var controls: Controls
     private var extras: PlayerHooks? = null
     // the subtitles' size (Stremio's setting), put back after the phone app's small window's bigger one
-    private var subtitleSize = SubtitleView.DEFAULT_TEXT_SIZE_FRACTION
+    // a little under Media3's 5.33% of the screen's height, the size TV players use
+    private var subtitleSize = 0.045f
     private lateinit var zoom: PictureZoom
     private var party = false
     private val partyTick = object : Runnable {
@@ -120,6 +121,20 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private inner class Renderers : DefaultRenderersFactory(this) {
+        // The TV's own DTS decoder (MediaTek's DSP) gives out stereo only, so a 5.1/7.1 DTS track
+        // reached the Dolby Digital encoder as 2 channels. DTS and TrueHD go to FFmpeg instead,
+        // which keeps every channel.
+        init {
+            setMediaCodecSelector { mime, secure, tunneling ->
+                when (mime) {
+                    androidx.media3.common.MimeTypes.AUDIO_DTS, androidx.media3.common.MimeTypes.AUDIO_DTS_HD,
+                    androidx.media3.common.MimeTypes.AUDIO_DTS_EXPRESS, androidx.media3.common.MimeTypes.AUDIO_DTS_X,
+                    androidx.media3.common.MimeTypes.AUDIO_TRUEHD -> emptyList()
+                    else -> androidx.media3.exoplayer.mediacodec.MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling)
+                }
+            }
+        }
+
         override fun buildTextRenderers(context: android.content.Context, output: TextOutput, outputLooper: Looper, extensionRendererMode: Int, out: ArrayList<Renderer>) {
             val own = ArrayList<Renderer>()
             super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, own)
@@ -127,11 +142,11 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         override fun buildAudioSink(context: android.content.Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink =
-            DefaultAudioSink.Builder(context)
+            TvAudioSink(DefaultAudioSink.Builder(context)
                 .setEnableFloatOutput(false) // (Dialogue boost works on 16-bit sound)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                 .setAudioProcessors(arrayOf(sound))
-                .build()
+                .build())
     }
 
     private val phone get() = (getSystemService(UI_MODE_SERVICE) as android.app.UiModeManager).currentModeType != Configuration.UI_MODE_TYPE_TELEVISION &&
@@ -139,11 +154,51 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var clock: TextView
     private var showClock = true
     private lateinit var seekFlash: TextView
+    private lateinit var loading: View
+    private lateinit var loadingWords: TextView
+    @Volatile private var busyUntil = 0L
+    // What arrives from the source while the picture waits: whether the server has sent anything
+    // yet (Easynews can take a while to start a file it hasn't served lately), and how fast
+    private val bytesIn = java.util.concurrent.atomic.AtomicLong()
+    private var lastBytes = 0L
+    private var lastBytesAt = 0L
+    private var rate = 0.0 // bytes a second, smoothed
+    private val fromEasynews by lazy {
+        val st = try { JSONObject(intent.getStringExtra(EXTRA_STREAM) ?: "{}") } catch (_: Exception) { JSONObject() }
+        Uri.parse(st.optString("url")).host.orEmpty().contains("easynews", true) || st.optString("url").contains("easynews", true) ||
+            st.optString("provider").contains("easynews", true)
+    }
+    private val received = object : androidx.media3.datasource.TransferListener {
+        override fun onTransferInitializing(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+        override fun onTransferStart(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+        override fun onBytesTransferred(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean, bytesTransferred: Int) { bytesIn.addAndGet(bytesTransferred.toLong()) }
+        override fun onTransferEnd(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+    }
+
+    /** "Waiting for the server…", then "Receiving 18 MB/s · 1.2 of 2.5 s ready" */
+    private fun arrival(now: Long): String {
+        val got = bytesIn.get()
+        if (lastBytesAt > 0 && now > lastBytesAt) {
+            val r = (got - lastBytes) * 1000.0 / (now - lastBytesAt)
+            rate = if (rate == 0.0) r else rate * 0.6 + r * 0.4
+        }
+        lastBytes = got; lastBytesAt = now
+        val exo = player ?: return ""
+        val who = if (fromEasynews) "Easynews" else "The server"
+        if (got == 0L) return "$who is preparing the file…"
+        val need = if (everReady) 5.0 else 2.5 // seconds the player wants before it plays (Media3's defaults)
+        val ready = (exo.totalBufferedDuration / 1000.0).coerceAtMost(need)
+        return "Receiving %.1f MB/s · %.1f of %.1f s ready".format(rate / 1_000_000, ready, need)
+    }
     private var player: ExoPlayer? = null
     private val handler = Handler(Looper.getMainLooper())
     private var closed = false
     private var lastError: String? = null
     private var lastText: List<String?> = emptyList()
+    /** Which source is playing (the page's sourceKey), for the audio track picked last time */
+    var sourceKey = ""
+        private set
+    private var audioRestored = false
 
     private val reportProgress = object : Runnable {
         override fun run() {
@@ -163,15 +218,38 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var skipButton: TextView
     // A torrent played on the TV itself: how it's going, while the picture waits for it
     private var torrent = false
+    private var waitingSince = 0L
+    private var everReady = false
     private val torrentStatus = object : Runnable {
         override fun run() {
             val exo = player
             val waiting = exo == null || exo.playbackState == Player.STATE_BUFFERING || exo.playbackState == Player.STATE_IDLE
+            // Any other stream: how long it has been waiting, so slow (an Easynews start) can be
+            // told from stuck (Back tries another source)
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (!waiting) waitingSince = 0L else if (waitingSince == 0L) waitingSince = now
+            val waited = if (waitingSince > 0L) (now - waitingSince) / 1000 else 0L
             val text = if (torrent && waiting) TorrentEngine.status() else null
+            // any other stream: a quiet spinner in the middle, a word under it only when it's slow
+            val spin = !torrent && waiting && (waited >= 1 || !everReady)
+            loading.visibility = if (spin) View.VISIBLE else View.GONE
+            val stage = if (spin && waited >= 2) arrival(now) else { lastBytesAt = 0; rate = 0.0; "" }
+            loadingWords.text = when {
+                now < busyUntil -> "The source is busy · trying again…"
+                waited >= 45 -> "$stage\nThis source isn't starting · Back to pick another"
+                waited >= 15 -> "$stage\nBack tries another source"
+                else -> stage
+            }.trim()
+            loadingWords.visibility = if (loadingWords.text.isEmpty()) View.GONE else View.VISIBLE
+            // never ready and nothing received in 90 s: it isn't coming, say so instead of spinning on
+            if (!torrent && !everReady && waited >= 90 && bytesIn.get() == 0L && !closed) {
+                finishWith(error = "The source didn't send anything in 90 s. Pick another source.")
+                return
+            }
             if (text != null) {
                 seekFlash.text = text
                 seekFlash.visibility = View.VISIBLE
-            } else if (seekFlash.text.contains("peer") || seekFlash.text.startsWith("Finding")) {
+            } else if (seekFlash.text.contains("peer") || seekFlash.text.startsWith("Finding") || seekFlash.text.startsWith("Buffering ·") || seekFlash.text.startsWith("Starting the stream")) {
                 seekFlash.visibility = View.GONE
             }
             handler.postDelayed(this, 700)
@@ -214,6 +292,29 @@ class PlayerActivity : AppCompatActivity() {
         playerView = findViewById(R.id.player_view)
         clock = findViewById(R.id.clock)
         seekFlash = findViewById(R.id.seek_flash)
+        run {
+            val d = resources.displayMetrics.density
+            loadingWords = TextView(this).apply {
+                setTextColor(0xCCFFFFFF.toInt()); textSize = 14f
+                gravity = android.view.Gravity.CENTER
+                setPadding(0, (14 * d).toInt(), 0, 0)
+                setShadowLayer(6f, 0f, 1f, Color.BLACK)
+            }
+            loading = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER
+                visibility = View.GONE
+                isClickable = false; isFocusable = false
+                addView(android.widget.ProgressBar(this@PlayerActivity).apply {
+                    isIndeterminate = true
+                    indeterminateTintList = android.content.res.ColorStateList.valueOf(0xE6FFFFFF.toInt())
+                }, android.widget.LinearLayout.LayoutParams((52 * d).toInt(), (52 * d).toInt()))
+                addView(loadingWords)
+            }
+            loadingWords.layoutParams = android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.MATCH_PARENT, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+            (seekFlash.parent as android.view.ViewGroup).addView(loading, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER))
+        }
         skipButton = findViewById(R.id.skip_button)
         skipButton.setOnClickListener { doSkip() }
 
@@ -231,15 +332,22 @@ class PlayerActivity : AppCompatActivity() {
         autoSkip = stream.optString("autoSkip", "off")
         showClock = stream.optBoolean("clock", true)
         torrent = stream.optBoolean("torrent", false)
-        findViewById<TextView>(R.id.title).text = stream.optString("title")
+        // "plain": no words over the picture (title, details, button names): Marquee's player
+        val plain = stream.optBoolean("plain", false)
+        findViewById<TextView>(R.id.title).apply {
+            text = stream.optString("title")
+            if (plain) visibility = View.GONE
+        }
         findViewById<TextView>(R.id.subtitle).apply {
             text = stream.optString("subtitle")
-            visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
+            visibility = if (plain || text.isNullOrEmpty()) View.GONE else View.VISIBLE
         }
+        if (plain) findViewById<View>(R.id.ctl_hint)?.tag = "plain"
 
         stream.optJSONObject("subtitleStyle")?.let { styleSubtitles(it) }
 
         val url = stream.optString("url")
+        sourceKey = stream.optString("sourceKey").ifEmpty { url.substringBefore('?') }
         if (url.isEmpty()) {
             finishWith(error = "no stream address")
             return
@@ -259,7 +367,23 @@ class PlayerActivity : AppCompatActivity() {
         val online = OkHttpDataSource.Factory(http)
             .setUserAgent(if (ownAgent) null else "dxbi-tv/${BuildConfigVersion.name(this)}")
             .setDefaultRequestProperties(headers)
+            .setTransferListener(received)
         val dataSource = extras?.dataSource(online) ?: online
+        // A host that answers 429 (too many requests: Real-Debrid when it's busy) is asked again
+        // after 2, 4, 8 and 16 s, and said so on screen; after that the error shows instead of a
+        // spinner that never ends
+        val errors = object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
+            override fun getRetryDelayMsFor(info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+                val code = (info.exception as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
+                if (code == 429) {
+                    busyUntil = android.os.SystemClock.elapsedRealtime() + 20_000
+                    return if (info.errorCount <= 4) 2000L shl (info.errorCount - 1) else C.TIME_UNSET
+                }
+                if (code != null && code in 400..499) return C.TIME_UNSET // a refused link won't start working by waiting
+                return super.getRetryDelayMsFor(info)
+            }
+            override fun getMinimumLoadableRetryCount(dataType: Int) = 5
+        }
 
         // The TV's own decoders first, falling back to software ones when a format isn't supported
         val renderers = Renderers()
@@ -267,7 +391,7 @@ class PlayerActivity : AppCompatActivity() {
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
 
         val exo = ExoPlayer.Builder(this, renderers)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource).setLoadErrorHandlingPolicy(errors))
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .setSeekBackIncrementMs(SEEK_STEP_MS)
@@ -327,15 +451,28 @@ class PlayerActivity : AppCompatActivity() {
             .setUri(Uri.parse(url))
             .setSubtitleConfigurations(subtitles)
             .build()
-        exo.setMediaItem(item, stream.optLong("startMs", 0L).coerceAtLeast(0L))
+        val startMs = stream.optLong("startMs", 0L).coerceAtLeast(0L)
+        val audioUrl = stream.optString("audioUrl")
+        if (audioUrl.isNotEmpty()) {
+            // picture and sound from separate addresses (YouTube trailers), played together
+            val factory = DefaultMediaSourceFactory(dataSource).setLoadErrorHandlingPolicy(errors)
+            exo.setMediaSource(androidx.media3.exoplayer.source.MergingMediaSource(
+                factory.createMediaSource(item), factory.createMediaSource(MediaItem.fromUri(Uri.parse(audioUrl)))), startMs)
+        } else exo.setMediaItem(item, startMs)
         exo.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) everReady = true
                 if (state == Player.STATE_ENDED) finishWith(ended = true, next = upNextSeconds > 0 && !upNextDismissed)
             }
 
             // A subtitle switched on mid-line only shows from its next line: a seek to where we are
             // brings the current one up straight away
             override fun onTracksChanged(tracks: Tracks) {
+                if (!audioRestored && tracks.groups.any { it.type == C.TRACK_TYPE_AUDIO }) {
+                    audioRestored = true
+                    if (AudioMemory.has(this@PlayerActivity, sourceKey)) AudioMemory.restore(this@PlayerActivity, sourceKey, exo, tracks)
+                    else AudioMemory.preferDolby(exo, tracks)
+                }
                 val text = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }.flatMap { g -> (0 until g.length).filter { g.isTrackSelected(it) }.map { i -> g.getTrackFormat(i).id } }
                 if (text.isNotEmpty() && text != lastText) exo.seekTo(exo.currentPosition)
                 lastText = text
@@ -359,12 +496,14 @@ class PlayerActivity : AppCompatActivity() {
         handler.postDelayed(reportProgress, PROGRESS_INTERVAL_MS)
         if (showClock) handler.post(updateClock)
         handler.postDelayed(checkSkip, 500)
-        if (torrent) handler.post(torrentStatus)
+        handler.post(torrentStatus)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            // Back leaves the player straight away, like Netflix (the position is kept)
+            // Back closes an open panel, then hides the controls, then leaves the player (the position is kept)
             override fun handleOnBackPressed() {
-                if (!controls.closePanel()) finishWith()
+                if (controls.closePanel()) return
+                if (controls.visible) { controls.hide(); return }
+                finishWith()
             }
         })
     }
@@ -394,14 +533,11 @@ class PlayerActivity : AppCompatActivity() {
             if (upNextCard.visibility == View.VISIBLE) return super.dispatchKeyEvent(event)
             if (!controls.visible) {
                 when (event.keyCode) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { seek(-1); return true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { seek(+1); return true }
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                        exo.playWhenReady = !exo.playWhenReady
-                        controls.show()
-                        return true
-                    }
-                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { controls.show(); return true }
+                    // Left/Right bring up the timeline and move along it (faster the longer they're held);
+                    // the key goes on to the timeline, which takes it from here
+                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { controls.scrub(); return super.dispatchKeyEvent(event) }
+                    // OK, Up and Down bring the controls up (pause from their play button, or the remote's play/pause key)
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { controls.show(); return true }
                 }
             }
         }
@@ -507,13 +643,15 @@ class PlayerActivity : AppCompatActivity() {
         playerView.requestFocus()
     }
 
-    private fun seek(direction: Int) {
+    private fun seek(direction: Int): Unit = seek(direction, SEEK_STEP_MS)
+
+    private fun seek(direction: Int, stepMs: Long) {
         val exo = player ?: return
-        if (direction > 0) exo.seekForward() else exo.seekBack()
-        seekFlash.text = if (direction > 0) "+10 s   ${clock(exo.currentPosition)}" else "−10 s   ${clock(exo.currentPosition)}"
-        seekFlash.visibility = View.VISIBLE
-        handler.removeCallbacks(hideFlash)
-        handler.postDelayed(hideFlash, 900)
+        val duration = exo.duration.takeIf { it != C.TIME_UNSET }
+        val target = (exo.currentPosition + direction * stepMs).coerceAtLeast(0L).let { if (duration != null) it.coerceAtMost(duration) else it }
+        exo.seekTo(target)
+        // No pop-up: the controls come up with the timeline, which shows where it went
+        if (::controls.isInitialized) controls.scrub()
     }
 
     private fun report() {
@@ -598,6 +736,12 @@ class PlayerActivity : AppCompatActivity() {
         val subs = playerView.subtitleView ?: return
         val overlay = playerView.overlayFrameLayout ?: return
         val frame = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_content_frame) ?: return
+        // white words with a soft shadow, no black box (the TV's caption settings default to a box);
+        // Stremio's own subtitle colours, when sent, replace this
+        if (!styled) subs.setStyle(CaptionStyleCompat(Color.WHITE, Color.TRANSPARENT, Color.TRANSPARENT,
+            CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW, 0xE6000000.toInt(), Typeface.create("sans-serif-medium", Typeface.NORMAL)))
+        if (!styled) { subs.setFractionalTextSize(subtitleSize); subs.setBottomPaddingFraction(0.05f) }
+        subs.setApplyEmbeddedFontSizes(false)
         if (subs.parent !== overlay) {
             (subs.parent as? android.view.ViewGroup)?.removeView(subs)
             overlay.addView(subs, android.widget.FrameLayout.LayoutParams(0, 0))
@@ -615,11 +759,13 @@ class PlayerActivity : AppCompatActivity() {
             )
             if (shown.width() <= 0 || shown.height() <= 0 || shown == last) return@addOnPreDrawListener true
             last = shown
+            // across the picture's width, down to the bottom of the screen (into a film's black bar,
+            // as Netflix does), so lines sit low and the same size whatever the picture's shape
             subs.layoutParams = (subs.layoutParams as android.widget.FrameLayout.LayoutParams).apply {
                 width = shown.width()
-                height = shown.height()
+                height = playerView.height
                 leftMargin = shown.left
-                topMargin = shown.top
+                topMargin = 0
             }
             false // drawn on the next frame, at the new size
         }
@@ -641,8 +787,11 @@ class PlayerActivity : AppCompatActivity() {
      * Stremio's subtitle settings (size, colours, outline, position) instead of the player's white
      * text on black boxes. Colours come as #RRGGBB or #RRGGBBAA.
      */
+    private var styled = false
+
     private fun styleSubtitles(style: JSONObject) {
         val view = playerView.subtitleView ?: return
+        styled = true
         fun color(key: String, fallback: Int): Int {
             val hex = style.optString(key).removePrefix("#")
             val v = hex.toLongOrNull(16) ?: return fallback

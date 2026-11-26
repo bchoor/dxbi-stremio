@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+: the system's own splash is plain navy with no icon; Marquee draws its animated one -->
+    <style name="Theme.Marquee" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/mq_bg</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="colorAccent">#FF8A3D</item>
+        <item name="android:windowSplashScreenBackground">@color/mq_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    </style>
+</resources>

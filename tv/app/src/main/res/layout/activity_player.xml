@@ -10,7 +10,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:focusable="true"
-        app:show_buffering="when_playing"
+        app:show_buffering="never"
         app:use_controller="false" />
 
     <!-- dx.bi's controls, laid out like the player on a computer -->
@@ -94,6 +94,11 @@
                     android:contentDescription="Play or pause"
                     android:src="@drawable/ic_pause" />
                 <ImageButton
+                    android:id="@+id/ctl_restart"
+                    style="@style/PlayerButton"
+                    android:contentDescription="Start from the beginning"
+                    android:src="@drawable/ic_restart" />
+                <ImageButton
                     android:id="@+id/ctl_rewind"
                     style="@style/PlayerButton"
                     android:contentDescription="Back 10 seconds"
@@ -138,6 +143,17 @@
                         android:maxLines="1"
                         android:textColor="#CCFFFFFF"
                         android:textSize="13sp" />
+
+                    <!-- the focused button's name -->
+                    <TextView
+                        android:id="@+id/ctl_hint"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:maxLines="1"
+                        android:textColor="#FFFFFFFF"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
                 </LinearLayout>
 
                 <LinearLayout
@@ -170,6 +186,11 @@
                     style="@style/PlayerButton"
                     android:contentDescription="Audio"
                     android:src="@drawable/ic_audio" />
+                <ImageButton
+                    android:id="@+id/ctl_external"
+                    style="@style/PlayerButton"
+                    android:contentDescription="Open in another player"
+                    android:src="@drawable/ic_external" />
                 <ImageButton
                     android:id="@+id/ctl_party"
                     style="@style/PlayerButton"

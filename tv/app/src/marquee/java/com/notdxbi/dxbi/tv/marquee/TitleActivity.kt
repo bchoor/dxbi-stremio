@@ -1,0 +1,669 @@
+package com.notdxbi.dxbi.tv.marquee
+
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
+import android.os.Bundle
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import coil3.load
+import com.notdxbi.dxbi.tv.R
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
+
+/** A title: what it is on the left, with Play, Trailer and Watchlist; its sources, best first, on the right */
+class TitleActivity : AppCompatActivity() {
+    private lateinit var item: Item
+    private var videoId = ""
+    private var episodeLabel = ""
+    private var autoplay = false
+    private val sources = mutableListOf<Source>()
+    private var filter = "All"
+    private val toggles = mutableSetOf<String>()
+    /** Only this add-on's sources (null: all of them) */
+    private var addonFilter: String? = null
+    private val counts = LinkedHashMap<String, Int>()
+    private val failed = LinkedHashMap<String, String>()
+    private var asking = 0
+    private var loadJob: Job? = null
+    private var episodes: List<JSONObject> = emptyList()
+    private var season = 1
+
+    private lateinit var backdrop: ImageView
+    private lateinit var title: TextView
+    private lateinit var metaLine: TextView
+    private lateinit var desc: TextView
+    private lateinit var logo: ImageView
+    private lateinit var facts: TextView
+    private lateinit var playButton: LinearLayout
+    private lateinit var trailerButton: LinearLayout
+    private lateinit var watchButton: LinearLayout
+    private lateinit var episodesBox: LinearLayout
+    private lateinit var seasonsRow: LinearLayout
+    private lateinit var episodesList: RecyclerView
+    private lateinit var sourcesStatus: TextView
+    private lateinit var filterRow: LinearLayout
+    private lateinit var addonRow: LinearLayout
+    private lateinit var backButton: View
+    private lateinit var buttonsRow: LinearLayout
+    private lateinit var sourcesList: RecyclerView
+    /** Where the remote was on each side, to land there again when it comes back */
+    private var lastLeft: View? = null
+    private var lastRight: View? = null
+    private val adapter = SourcesAdapter { play(it) }
+    private var trailerYt: String? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val x = intent
+        item = Item(x.getStringExtra("id").orEmpty(), x.getStringExtra("type").orEmpty(), x.getStringExtra("name").orEmpty(),
+            x.getStringExtra("poster").orEmpty(), x.getStringExtra("background").orEmpty(), x.getStringExtra("description").orEmpty(),
+            x.getStringExtra("year").orEmpty(), videoId = x.getStringExtra("videoId").orEmpty())
+        autoplay = x.getBooleanExtra("autoplay", false)
+        build()
+
+        title.text = item.name
+        desc.text = item.description
+        backdrop.load(backdropFor(item))
+        updateWatchButton()
+        playButton.requestFocus()
+
+        lifecycleScope.launch {
+            Session.ensureAddons()
+            if (item.type != "series") { videoId = item.id; loadSources() }
+            else if (item.videoId.isNotEmpty()) { videoId = item.videoId; episodeLabel = labelFor(item.videoId, null); loadSources() }
+            val meta = Session.meta(item.type, item.id)
+            if (meta != null) fill(meta)
+            else if (item.type == "series" && videoId.isEmpty()) sourcesStatus.text = "Couldn't load the episodes"
+        }
+    }
+
+    private fun build() {
+        val root = FrameLayout(this).apply { setBackgroundColor(Ui.BG) }
+        backdrop = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0.6f }
+        root.addView(backdrop, match())
+        root.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF20B1026.toInt(), 0x990B1026.toInt())) }, match())
+
+        val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false; setPadding(dp(40), dp(24), dp(24), dp(20)) }
+        val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
+        backButton = iconButton(R.drawable.ic_mq_back, "Back").apply { setOnClickListener { finish() } }
+        left.addView(backButton, LinearLayout.LayoutParams(dp(40), dp(40)))
+        // the title's own logo art when it has one (as Netflix shows), else its name
+        logo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_START; adjustViewBounds = true; visibility = View.GONE }
+        left.addView(logo, LinearLayout.LayoutParams(dp(380), dp(96)).apply { topMargin = dp(16) })
+        title = label("", 30f, bold = true, lines = 3).apply { ellipsize = android.text.TextUtils.TruncateAt.END }
+        left.addView(title, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) })
+        metaLine = label("", 13f, Ui.MUTED)
+        left.addView(metaLine, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        desc = label("", 14f, lines = 4).apply { setLineSpacing(0f, 1.15f) }
+        left.addView(desc, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+        // Starring, Director, Writers, Country, Awards
+        facts = label("", 12f, Ui.MUTED, lines = 5).apply { setLineSpacing(0f, 1.25f) }
+        left.addView(facts, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
+        buttonsRow = buttons
+        val gap = { LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) } }
+        playButton = pillButton(R.drawable.ic_mq_play, "Play", primary = true, sub = "Finding sources…").apply { setOnClickListener { sources.firstOrNull()?.let { play(it) } } }
+        trailerButton = pillButton(R.drawable.ic_mq_trailer, "Trailer").apply { visibility = View.GONE; setOnClickListener { trailerYt?.let { Play.trailer(this@TitleActivity, it, item.name) } } }
+        watchButton = pillButton(R.drawable.ic_mq_add, "My List").apply { setOnClickListener { toggleWatchlist() } }
+        buttons.addView(playButton, gap()); buttons.addView(trailerButton, gap()); buttons.addView(watchButton, gap())
+        left.addView(buttons, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) })
+
+        // episodes (series only): season chips, then the episodes of that season
+        episodesBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE; clipChildren = false; clipToPadding = false }
+        seasonsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(2), dp(6), dp(2), dp(6)) }
+        episodesBox.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(seasonsRow) })
+        episodesList = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
+            itemAnimator = null
+            clipToPadding = false
+            clipChildren = false
+            setPadding(dp(12), dp(8), dp(40), dp(8))
+        }
+        episodesBox.addView(episodesList, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(128)))
+        left.addView(episodesBox, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
+        body.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { marginEnd = dp(20) })
+
+        // sources, on the right
+        val right = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = round(0xE616181D.toInt(), 12, this@TitleActivity)
+            setPadding(dp(12), dp(14), dp(12), dp(8))
+        }
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM; setPadding(dp(4), 0, dp(4), 0) }
+        head.addView(label("Sources", 18f, bold = true))
+        sourcesStatus = label("", 11f, Ui.MUTED)
+        head.addView(sourcesStatus, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(10) })
+        // three zones: the heading and filters stay put, and only the list under them moves
+        val zone = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = round(Ui.SURFACE, 10, this@TitleActivity)
+            setPadding(dp(8), dp(10), dp(8), dp(4))
+            clipChildren = false
+            clipToPadding = false
+        }
+        zone.addView(head)
+        right.addView(zone)
+        addonRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(2), dp(10), dp(2), 0) }
+        zone.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipChildren = false; clipToPadding = false; addView(addonRow) })
+        filterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(2), dp(8), dp(2), dp(8)) }
+        // the resolution is one choice (All, 4K or 1080p); DV, Atmos and Instant are switches that
+        // all have to hold (DV and Atmos on: Dolby Vision sources with Atmos sound); All clears them
+        fun mark() {
+            for (i in 0 until filterRow.childCount) {
+                val c = filterRow.getChildAt(i)
+                val f = c.tag as String
+                c.isSelected = if (f in TOGGLES) f in toggles else f == filter && (f != "All" || toggles.isEmpty())
+            }
+        }
+        for (f in listOf("All", "4K", "1080p") + TOGGLES) {
+            filterRow.addView(chip(f).apply {
+                tag = f
+                setOnClickListener {
+                    when {
+                        f in TOGGLES -> if (!toggles.remove(f)) toggles.add(f)
+                        f == "All" -> { filter = "All"; toggles.clear() }
+                        else -> filter = if (filter == f) "All" else f
+                    }
+                    mark(); render()
+                }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+        }
+        mark()
+        zone.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipChildren = false; clipToPadding = false; addView(filterRow) })
+        val list = RecyclerView(this).apply {
+            layoutManager = KeylineLayout(context)
+            adapter = this@TitleActivity.adapter
+            sourcesList = this
+            itemAnimator = null
+            // cards stay inside the list's own box, fading out under the filters
+            clipChildren = true
+            clipToPadding = true
+            setPadding(0, dp(8), 0, dp(12))
+            isVerticalFadingEdgeEnabled = true
+            setFadingEdgeLength(dp(20))
+        }
+        val viewport = FrameLayout(this).apply { clipChildren = true; clipToPadding = true }
+        viewport.addView(list, match())
+        right.addView(viewport, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
+        body.addView(right, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        root.addView(body, match())
+        setContentView(root)
+        root.viewTreeObserver.addOnGlobalFocusChangeListener { _, now ->
+            if (now == null) return@addOnGlobalFocusChangeListener
+            if (inside(right, now)) lastRight = now else if (inside(left, now)) lastLeft = now
+        }
+        rightPane = right
+        leftPane = left
+    }
+
+    /** The focused source sits one card down from the top (the one above it in view), moved there at once, not glided */
+    private class KeylineLayout(ctx: android.content.Context) : LinearLayoutManager(ctx) {
+        override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: android.graphics.Rect, immediate: Boolean, focusedChildVisible: Boolean): Boolean {
+            val pos = getPosition(child)
+            val above = if (pos > 0) child.height + (child.layoutParams as? ViewGroup.MarginLayoutParams)?.bottomMargin.let { it ?: 0 } else 0
+            val dy = child.top - (parent.paddingTop + above)
+            if (dy == 0) return false
+            parent.scrollBy(0, dy)
+            return true
+        }
+    }
+
+    private lateinit var leftPane: View
+    private lateinit var rightPane: View
+
+    private fun inside(parent: View, v: View): Boolean {
+        var p: View? = v
+        while (p != null) { if (p === parent) return true; p = p.parent as? View }
+        return false
+    }
+
+    // ---- The remote: ◀ ▶ switch between the two sides, ▲ ▼ move only within the side you're on ----
+
+    /** A line the remote moves along: chips or buttons side by side, or a list */
+    private sealed class Line {
+        class Views(val views: () -> List<View>) : Line()
+        class Strip(val list: RecyclerView, val vertical: Boolean) : Line()
+    }
+
+    private fun shownChildren(row: LinearLayout) = (0 until row.childCount).map { row.getChildAt(it) }.filter { it.visibility == View.VISIBLE && it.isFocusable }
+
+    private fun leftLines(): List<Line> = listOfNotNull(
+        Line.Views { listOf(backButton) },
+        Line.Views { shownChildren(buttonsRow) },
+        if (episodesBox.visibility == View.VISIBLE) Line.Views { shownChildren(seasonsRow) } else null,
+        if (episodesBox.visibility == View.VISIBLE) Line.Strip(episodesList, vertical = false) else null,
+    )
+
+    private fun rightLines(): List<Line> = listOfNotNull(
+        if (addonRow.childCount > 0) Line.Views { shownChildren(addonRow) } else null,
+        Line.Views { shownChildren(filterRow) },
+        if ((sourcesList.adapter?.itemCount ?: 0) > 0) Line.Strip(sourcesList, vertical = true) else null,
+    )
+
+    private fun itemAt(list: RecyclerView, pos: Int, then: (View) -> Unit = {}) {
+        val n = list.adapter?.itemCount ?: 0
+        if (pos !in 0 until n) return
+        list.findViewHolderForAdapterPosition(pos)?.itemView?.let { if (it.requestFocus()) { then(it); return } }
+        list.scrollToPosition(pos)
+        list.post { list.findViewHolderForAdapterPosition(pos)?.itemView?.requestFocus() }
+    }
+
+    /** Lands on a line: its chosen chip (or first), or the list's first item */
+    private fun enter(line: Line) {
+        when (line) {
+            is Line.Views -> line.views().let { v -> (v.firstOrNull { it.isSelected } ?: v.firstOrNull())?.requestFocus() }
+            is Line.Strip -> {
+                val chosen = (line.list.adapter as? EpisodesAdapter)?.let { a -> a.items.indexOfFirst { it.optString("id") == a.chosen } } ?: -1
+                itemAt(line.list, if (chosen >= 0) chosen else 0)
+            }
+        }
+    }
+
+    private fun goToSide(toRight: Boolean) {
+        val last = if (toRight) lastRight else lastLeft
+        if (last != null && last.isAttachedToWindow && last.isShown && last.requestFocus()) return
+        if (toRight) rightLines().let { (it.lastOrNull { l -> l is Line.Strip } ?: it.firstOrNull())?.let(::enter) }
+        else playButton.requestFocus()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        if (event.action != KeyEvent.ACTION_DOWN || code !in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT))
+            return super.dispatchKeyEvent(event)
+        val f = currentFocus ?: return super.dispatchKeyEvent(event)
+        val onRight = inside(rightPane, f)
+        if (!onRight && !inside(leftPane, f)) return super.dispatchKeyEvent(event)
+        val lines = if (onRight) rightLines() else leftLines()
+        val li = lines.indexOfFirst { l ->
+            when (l) { is Line.Views -> l.views().any { inside(it, f) }; is Line.Strip -> inside(l.list, f) }
+        }
+        if (li < 0) return super.dispatchKeyEvent(event)
+        val line = lines[li]
+        // position along the line, and how long it is
+        val (pos, count) = when (line) {
+            is Line.Views -> line.views().let { v -> v.indexOfFirst { inside(it, f) } to v.size }
+            is Line.Strip -> (line.list.findContainingItemView(f)?.let { line.list.getChildAdapterPosition(it) } ?: 0) to (line.list.adapter?.itemCount ?: 0)
+        }
+        val alongIsVertical = line is Line.Strip && line.vertical
+        fun step(d: Int): Boolean {
+            val to = pos + d
+            if (to !in 0 until count) return false
+            when (line) { is Line.Views -> line.views()[to].requestFocus(); is Line.Strip -> itemAt(line.list, to) }
+            return true
+        }
+        fun lineUp() { if (li > 0) enter(lines[li - 1]) }
+        fun lineDown() { if (li < lines.size - 1) enter(lines[li + 1]) }
+        when (code) {
+            KeyEvent.KEYCODE_DPAD_UP -> if (alongIsVertical) { if (!step(-1)) lineUp() } else lineUp()
+            KeyEvent.KEYCODE_DPAD_DOWN -> if (alongIsVertical) step(+1) else lineDown()
+            KeyEvent.KEYCODE_DPAD_LEFT -> if (alongIsVertical || !step(-1)) { if (onRight) goToSide(toRight = false) }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> if (alongIsVertical || !step(+1)) { if (!onRight) goToSide(toRight = true) }
+        }
+        return true
+    }
+
+    private fun fill(meta: JSONObject) {
+        val name = meta.optString("name").ifEmpty { item.name }
+        val poster = meta.optString("poster").ifEmpty { item.poster }
+        item = item.copy(name = name, poster = poster, background = meta.optString("background").ifEmpty { item.background },
+            description = meta.optString("description").ifEmpty { item.description })
+        title.text = name
+        desc.text = item.description
+        val logoUrl = meta.optString("logo")
+        if (logoUrl.startsWith("http")) logo.load(logoUrl) {
+            listener(onSuccess = { _, _ -> logo.visibility = View.VISIBLE; title.visibility = View.GONE })
+        }
+        facts.text = android.text.SpannableStringBuilder().apply {
+            fun line(name: String, value: String) {
+                if (value.isEmpty()) return
+                if (length > 0) append("\n")
+                val start = length
+                append(name).append("  ")
+                setSpan(android.text.style.ForegroundColorSpan(Ui.TEXT), start, length, 0)
+                setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), start, length, 0)
+                append(value)
+            }
+            fun names(key: String, n: Int) = meta.optJSONArray(key).strings().take(n).joinToString(", ")
+            line("Starring", names("cast", 5))
+            line("Director", names("director", 3))
+            line("Writers", names("writer", 3))
+            line("Country", meta.optString("country").takeIf { it != "null" }.orEmpty())
+            line("Awards", meta.optString("awards").takeIf { it != "null" && it != "N/A" }.orEmpty())
+        }
+        metaLine.text = listOf(
+            meta.optString("releaseInfo", meta.optString("year")),
+            meta.optString("runtime"),
+            meta.optJSONArray("genres").strings().take(3).joinToString(", "),
+            meta.optString("imdbRating").takeIf { it.isNotEmpty() && it != "null" }?.let { "IMDb $it" }.orEmpty(),
+        ).filter { it.isNotEmpty() }.joinToString("  ·  ")
+        if (item.background.isNotEmpty()) backdrop.load(item.background)
+        trailerYt = Session.trailerId(meta)
+        trailerButton.visibility = if (trailerYt != null) View.VISIBLE else View.GONE
+
+        if (item.type == "series") {
+            episodes = meta.optJSONArray("videos").objects()
+                .filter { it.optInt("season") > 0 }
+                .sortedWith(compareBy<JSONObject>({ it.optInt("season") }, { it.optInt("episode") }))
+            if (episodes.isEmpty()) return
+            // where you left off, else the first episode
+            val last = Play.library[item.id]?.optJSONObject("state")?.optString("video_id")?.takeIf { it.isNotEmpty() && it != "null" }
+            val start = episodes.firstOrNull { it.optString("id") == videoId }
+                ?: episodes.firstOrNull { it.optString("id") == last }
+                ?: episodes.first()
+            episodesBox.visibility = View.VISIBLE
+            val seasons = episodes.map { it.optInt("season") }.distinct()
+            seasonsRow.removeAllViews()
+            for (s in seasons) seasonsRow.addView(chip("Season $s").apply { tag = s; setOnClickListener { showSeason(s) } },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+            showSeason(start.optInt("season"))
+            if (videoId != start.optString("id")) selectEpisode(start)
+            else { episodeLabel = labelFor(videoId, start); (episodesList.adapter as? EpisodesAdapter)?.chosen = videoId; episodesList.adapter?.notifyDataSetChanged() }
+        }
+    }
+
+    private fun showSeason(s: Int) {
+        season = s
+        for (i in 0 until seasonsRow.childCount) seasonsRow.getChildAt(i).let { it.isSelected = it.tag == s }
+        val list = episodes.filter { it.optInt("season") == s }
+        episodesList.adapter = EpisodesAdapter(list, videoId) { selectEpisode(it) }
+        val at = list.indexOfFirst { it.optString("id") == videoId }
+        if (at > 0) episodesList.scrollToPosition(at)
+    }
+
+    private fun selectEpisode(ep: JSONObject) {
+        videoId = ep.optString("id")
+        episodeLabel = labelFor(videoId, ep)
+        (episodesList.adapter as? EpisodesAdapter)?.let { it.chosen = videoId; it.notifyDataSetChanged() }
+        loadSources()
+    }
+
+    private fun labelFor(id: String, ep: JSONObject?): String {
+        val parts = id.split(':')
+        val se = if (parts.size >= 3) "S${parts[parts.size - 2]} E${parts.last()}" else ""
+        val name = if (ep == null) "" else ep.optString("name", ep.optString("title"))
+        return listOf(se, name).filter { it.isNotEmpty() }.joinToString(" · ")
+    }
+
+    /** Every add-on with streams is asked at once; the list fills in as each one answers */
+    private fun loadSources() {
+        loadJob?.cancel()
+        sources.clear()
+        counts.clear()
+        failed.clear()
+        addonFilter = null
+        render()
+        val id = videoId
+        val askers = Session.addons.filter { it.supports("stream", item.type, id) }
+        if (askers.isEmpty()) { sourcesStatus.text = "None of your add-ons has sources for this"; return }
+        asking = askers.size
+        status()
+        setPill(playButton, null, playWord(), "Finding sources…")
+        loadJob = lifecycleScope.launch {
+            val jobs = askers.map { a ->
+                launch {
+                    val started = System.currentTimeMillis()
+                    var http = "ok"
+                    suspend fun ask() = withTimeoutOrNull(30_000) {
+                        try { Api.get(a.streamUrl(item.type, id)).optJSONArray("streams").objects().map { Source(a, it) } }
+                        catch (e: Exception) { http = e.message ?: "error"; null }
+                    }
+                    var got = ask()
+                    // AIOStreams answers empty when the services behind it (Easynews) were too slow that time: ask once more
+                    if (got != null && got.isEmpty() && a.base.contains("aiostreams", ignoreCase = true)) {
+                        kotlinx.coroutines.delay(3_000)
+                        got = ask() ?: got
+                    }
+                    if (got == null && http == "ok") http = "timed out"
+                    val playable = got.orEmpty().filter { it.url.isNotEmpty() }
+                    android.util.Log.i("MarqueeStreams", "addon=${a.name} host=${android.net.Uri.parse(a.base).host} http=$http streams=${got?.size ?: 0} withUrl=${playable.size} ms=${System.currentTimeMillis() - started}")
+                    asking--
+                    // (Local Files only answers when the Stremio app's own server is running: not a failure worth showing)
+                    val local = android.net.Uri.parse(a.base).host.let { it == "127.0.0.1" || it == "localhost" }
+                    if (got == null && !local) failed[a.name] = http
+                    if (playable.isNotEmpty()) counts[a.name] = playable.size
+                    merge(playable)
+                    addonChips()
+                    status()
+                }
+            }
+            if (autoplay) {
+                withTimeoutOrNull(12_000) { jobs.joinAll() }
+                autoplay = false
+                sources.firstOrNull()?.let { play(it) }
+            }
+            jobs.joinAll()
+            if (sources.isEmpty()) setPill(playButton, null, playWord(), "No sources")
+        }
+    }
+
+    /** "8 sources", plus any add-on that failed (the ones with nothing for this title stay quiet) */
+    private fun status() {
+        val parts = mutableListOf<String>()
+        parts += if (sources.isEmpty() && asking == 0) "No sources found" else "${sources.size} sources"
+        if (asking > 0) parts += "still asking $asking"
+        failed.forEach { (name, why) -> parts += "$name failed ($why)" }
+        sourcesStatus.text = parts.joinToString(" · ")
+    }
+
+    /** One chip per add-on that had sources: All · Torrentio 5 · AIOStreams 3 */
+    private fun addonChips() {
+        val had = addonRow.findFocus() != null
+        addonRow.removeAllViews()
+        val names = listOf<String?>(null) + counts.keys
+        for (n in names) {
+            addonRow.addView(chip(if (n == null) "All" else "$n ${counts[n]}").apply {
+                isSelected = n == addonFilter
+                setOnClickListener {
+                    addonFilter = n
+                    for (i in 0 until addonRow.childCount) addonRow.getChildAt(i).isSelected = addonRow.getChildAt(i) == this
+                    render()
+                }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+        }
+        if (had) addonRow.getChildAt(names.indexOf(addonFilter).coerceAtLeast(0))?.requestFocus()
+    }
+
+    private fun merge(got: List<Source>) {
+        val best = LinkedHashMap<String, Source>()
+        for (s in sources + got) { val old = best[s.key]; if (old == null || s.score > old.score) best[s.key] = s }
+        sources.clear()
+        sources.addAll(best.values.sortedByDescending { it.score })
+        render()
+    }
+
+    private fun render() {
+        adapter.items = sources.filter {
+            (addonFilter == null || it.addon.name == addonFilter) && when (filter) {
+                "4K" -> it.res >= 2160
+                "1080p" -> it.res in 1080..2159
+                else -> true
+            } && ("DV" !in toggles || it.dv) && ("Atmos" !in toggles || it.atmos) && ("Instant" !in toggles || it.instant)
+        }
+        adapter.notifyDataSetChanged()
+        sources.firstOrNull()?.let { best -> setPill(playButton, null, playWord(), (listOf(best.resLabel, best.pictureLabel, best.audio).filter { it.isNotEmpty() && it != "SDR" }).joinToString(" · ")) }
+    }
+
+    private fun resumeMs(): Long {
+        val state = Play.library[item.id]?.optJSONObject("state") ?: return 0
+        if (item.type == "series" && state.optString("video_id") != videoId) return 0
+        return state.optLong("timeOffset")
+    }
+
+    private fun playWord() = if (resumeMs() > 30_000) "Resume" else "Play"
+
+
+    private fun play(source: Source) {
+        lifecycleScope.launch { Play.start(this@TitleActivity, item, videoId, episodeLabel, source, Session.addons, resumeMs()) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::playButton.isInitialized) { updateWatchButton(); sources.firstOrNull()?.let { render() } ?: setPill(playButton, null, playWord()) }
+    }
+
+    private fun updateWatchButton() {
+        val on = Play.inWatchlist(item.id)
+        setPill(watchButton, if (on) R.drawable.ic_mq_check else R.drawable.ic_mq_add, "My List")
+    }
+
+    private fun toggleWatchlist() {
+        val on = !Play.inWatchlist(item.id)
+        Play.setWatchlist(item, on) { ok ->
+            if (ok) updateWatchButton() else Toast.makeText(this, "Couldn't update My List", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+private val TOGGLES = listOf("DV", "Atmos", "Instant")
+
+/**
+ * The sources list, one card each:
+ *   [  4K  ]  ⚡ INSTANT  EXTENDED  WEB      19.4 GB
+ *   [  DV  ]  Dune.Part.Two.2024.2160p.WEB-DL…
+ *   [ DD+  ]  Torrentio · RD+
+ *   [Atmos ]
+ */
+class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapter<SourcesAdapter.Holder>() {
+    var items: List<Source> = emptyList()
+
+    init { setHasStableIds(true) }
+    override fun getItemId(position: Int) = items[position].key.hashCode().toLong()
+    override fun getItemCount() = items.size
+
+    class Holder(view: View, val main: LinearLayout, val stripe: View, val res: TextView, val pic: TextView, val badges: LinearLayout, val size: TextView,
+                 val name: TextView, val from: TextView) : RecyclerView.ViewHolder(view)
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
+        val ctx = parent.context
+        val wrap = LinearLayout.LayoutParams.WRAP_CONTENT
+        val row = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = ctx.dp(4) }
+        }
+        val main = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(ctx.dp(6), ctx.dp(5), ctx.dp(10), ctx.dp(5))
+            isFocusable = true
+            isClickable = true
+            background = StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_focused), round(Ui.SURFACE_2, 8, ctx, 2, Color.WHITE))
+                addState(intArrayOf(), round(Color.TRANSPARENT, 8, ctx))
+            }
+        }
+        // a strip in the provider's colour (Torrentio blue, Easynews green)
+        val stripe = View(ctx)
+        main.addView(stripe, LinearLayout.LayoutParams(ctx.dp(4), LinearLayout.LayoutParams.MATCH_PARENT).apply { marginEnd = ctx.dp(8) })
+        // the tile: resolution, the picture under it, then the sound
+        val tile = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = round(Ui.SURFACE_2, 6, ctx)
+            setPadding(ctx.dp(3), ctx.dp(3), ctx.dp(3), ctx.dp(3))
+        }
+        val res = ctx.label("", 14f, bold = true).apply { gravity = Gravity.CENTER }
+        val pic = ctx.label("", 10f, Ui.ACCENT, bold = true).apply { gravity = Gravity.CENTER }
+        val snd = ctx.label("", 10f, Ui.TEXT, bold = true).apply { gravity = Gravity.CENTER; tag = "snd" }
+        val atmos = ctx.label("Atmos", 9f, Ui.MUTED, bold = true).apply { gravity = Gravity.CENTER; tag = "atmos" }
+        tile.addView(res); tile.addView(pic); tile.addView(snd); tile.addView(atmos)
+        tile.minimumHeight = ctx.dp(52)
+        main.addView(tile, LinearLayout.LayoutParams(ctx.dp(68), LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(10) })
+        main.tag = tile
+
+        val words = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        val top = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val badges = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        top.addView(badges, LinearLayout.LayoutParams(0, wrap, 1f))
+        val size = ctx.label("", 11f, Ui.MUTED, bold = true)
+        top.addView(size)
+        words.addView(top)
+        // the file name scrolls when the card is focused
+        val name = ctx.label("", 12f).apply {
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+            marqueeRepeatLimit = -1
+            isDuplicateParentStateEnabled = false
+        }
+        words.addView(name, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, wrap).apply { topMargin = ctx.dp(3) })
+        val from = ctx.label("", 11f, Ui.MUTED, bold = true)
+        words.addView(from, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, wrap).apply { topMargin = ctx.dp(2) })
+        main.addView(words, LinearLayout.LayoutParams(0, wrap, 1f))
+        row.addView(main, LinearLayout.LayoutParams(0, wrap, 1f))
+
+        main.onFocusChangeListener = View.OnFocusChangeListener { _, has -> name.isSelected = has }
+        return Holder(row, main, stripe, res, pic, badges, size, name, from)
+    }
+
+    override fun onBindViewHolder(holder: Holder, position: Int) {
+        val s = items[position]
+        val ctx = holder.itemView.context
+        holder.res.text = s.resLabel
+        holder.pic.text = s.pictureLabel
+        holder.pic.setTextColor(if (s.dv && !s.dv7) Ui.ACCENT else if (s.hdr) 0xFF5AA9FF.toInt() else Ui.MUTED)
+        val tile = holder.main.tag as View
+        tile.findViewWithTag<TextView>("snd").apply { text = s.soundLabel; visibility = if (s.soundLabel.isEmpty()) View.GONE else View.VISIBLE }
+        tile.findViewWithTag<TextView>("atmos").visibility = if (s.atmos) View.VISIBLE else View.GONE
+        holder.badges.removeAllViews()
+        for ((text, kind) in s.badges()) holder.badges.addView(ctx.badge(text, kind), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(4) })
+        holder.size.text = s.size
+        holder.name.text = s.fileName.ifEmpty { s.name }
+        holder.stripe.background = round(s.providerColor, 2, ctx)
+        holder.from.text = s.provider.uppercase()
+        holder.from.setTextColor(s.providerColor)
+        holder.main.contentDescription = "${s.resLabel} ${s.pictureLabel} ${s.audio} ${s.from}"
+        holder.main.setOnClickListener { onPlay(s) }
+    }
+}
+
+/** A season's episodes as small pictures; the chosen one has a gold ring */
+class EpisodesAdapter(val items: List<JSONObject>, var chosen: String, private val onPick: (JSONObject) -> Unit) : RecyclerView.Adapter<EpisodesAdapter.Holder>() {
+    class Holder(val card: FrameLayout, val image: ImageView, val words: TextView) : RecyclerView.ViewHolder(card)
+
+    override fun getItemCount() = items.size
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
+        val ctx = parent.context
+        val card = FrameLayout(ctx).apply {
+            layoutParams = RecyclerView.LayoutParams(ctx.dp(176), ctx.dp(99)).apply { marginEnd = ctx.dp(10) }
+            clipToOutline = true
+            outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+            focusGrow(1.06f)
+        }
+        val image = ImageView(ctx).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        card.addView(image, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        card.addView(View(ctx).apply { background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xE6000000.toInt(), 0x00000000)) },
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, ctx.dp(50), Gravity.BOTTOM))
+        val words = ctx.label("", 11f, bold = true, lines = 2).apply { setPadding(ctx.dp(8), 0, ctx.dp(8), ctx.dp(6)) }
+        card.addView(words, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+        return Holder(card, image, words)
+    }
+
+    override fun onBindViewHolder(holder: Holder, position: Int) {
+        val ep = items[position]
+        val ctx = holder.card.context
+        val on = ep.optString("id") == chosen
+        holder.card.background = round(Ui.SURFACE_2, 6, ctx)
+        holder.card.foreground = if (on) round(Color.TRANSPARENT, 6, ctx, 3, Ui.ACCENT) else icon(ctx, R.drawable.mq_focus)
+        holder.words.text = "E${ep.optInt("episode")}  ${ep.optString("name", ep.optString("title"))}"
+        holder.card.contentDescription = holder.words.text
+        holder.image.load(ep.optString("thumbnail").ifEmpty { null })
+        holder.card.setOnClickListener { onPick(ep) }
+    }
+}

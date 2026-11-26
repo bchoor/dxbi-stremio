@@ -6,3 +6,6 @@ local.properties
 *.jks
 keystore.properties
 .kotlin/
+
+# built in CI by native/ac3enc/build.sh
+app/src/main/jniLibs/*/libac3enc.so

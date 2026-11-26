@@ -189,6 +189,9 @@
     .dxtv-row small { display: block; margin-top: 4px; color: #9a9a9a; font-size: 13px; line-height: 1.4; }
     .dxtv-row b { flex: none; color: #e50914; font-weight: 700; }
     .dxtv-settings-entry { margin: 0 0 24px; }
+    .dxtv-qr-login { position: fixed; right: 48px; top: 32px; z-index: 2147483000; padding: 14px 22px; border: 0; border-radius: 10px; background: #fff; color: #111; font: 600 17px Inter, system-ui, sans-serif; cursor: pointer; }
+    .dxtv-qr-login:focus { outline: 3px solid #e50914; outline-offset: 3px; }
+    .dxtv-code { display: block; margin: 0 0 14px; text-align: center; font: 700 30px/1.2 Inter, system-ui, sans-serif; letter-spacing: .25em; color: #fff; }
     .dxtv-qr { display: block; width: 220px; height: 220px; margin: 0 auto 18px; border-radius: 8px; background: #fff; }
     /* No streaming server runs on the TV itself (debrid streams don't need one): no nagging bar */
     [class*="board-warning-container"] { display: none !important; }
@@ -206,7 +209,7 @@
   let openModal = null;
 
   // Resolves with the button index (or { button, value } when there's an input); -1 when dismissed
-  async function dialog({ title, message, buttons, input, qr }) {
+  async function dialog({ title, message, buttons, input, qr, qrImage, onOpen }) {
     message = forDevice(message);
     ensureStyle();
     closeModal();
@@ -221,6 +224,7 @@
       el.innerHTML = `<div class="dxtv-sheet" role="dialog">
         <h2>${esc(title)}</h2>${message ? `<p>${esc(String(message).replace(/<[^>]+>/g, ""))}</p>` : ""}
         ${qr ? `<svg class="dxtv-qr" viewBox="-4 -4 37 37" aria-hidden="true"><path d="${qr}"/></svg>` : ""}
+        ${qrImage ? `<img class="dxtv-qr" alt="" src="${esc(qrImage)}">` : ""}
         ${input != null ? `<input type="text" value="${esc(input)}">` : ""}
         <div class="dxtv-buttons">${buttons.map((b, i) => `<button class="dxtv-btn" data-i="${i}">${esc(b)}</button>`).join("")}</div>
       </div>`;
@@ -238,6 +242,7 @@
       });
       document.body.append(el);
       openModal = { el, dismiss: () => finish(-1) };
+      if (onOpen) onOpen(el, finish);
       const first = field || el.querySelector(".dxtv-btn");
       first.focus();
       // a dialog of Stremio's that just closed hands focus back a moment later: take it again
@@ -429,18 +434,28 @@
   function ensureSettingsEntry() {
     if (!/^#\/settings/.test(location.hash)) return;
     // also in Settings' own list (General, Interface… Shortcuts), where people look for it
-    const shortcuts = document.querySelector('[class*="settings-container"] [data-section="shortcuts"], [class*="settings-content"] [data-section="shortcuts"]');
+    // (Stremio's settings from November 2026: a nav menu of groups with item links, no data-section)
+    const menuItems = [...document.querySelectorAll('[class*="settings-content"] nav[class*="menu-"] [class*="group-"] > a[class*="item-"]')];
+    const shortcuts = document.querySelector('[class*="settings-container"] [data-section="shortcuts"], [class*="settings-content"] [data-section="shortcuts"]')
+      || menuItems.find((a) => /^shortcuts$/i.test(a.textContent.trim())) || menuItems[menuItems.length - 1];
     if (shortcuts && !shortcuts.parentElement.querySelector(".dxtv-side")) {
-      const side = document.createElement("div");
-      side.className = `${shortcuts.className} dxtv-side`;
+      const side = document.createElement(shortcuts.tagName === "A" ? "a" : "div");
+      side.className = `${String(shortcuts.className).replace(/\S*selected\S*/g, "")} dxtv-side`;
       side.tabIndex = 0;
       side.title = "dx.bi";
-      side.textContent = "dx.bi";
+      const label = shortcuts.querySelector('[class*="item-label"]');
+      if (label) {
+        const l = document.createElement("div");
+        l.className = label.className;
+        l.textContent = "dx.bi";
+        side.append(l);
+      } else side.textContent = "dx.bi";
       side.addEventListener("click", settingsSheet);
       side.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); settingsSheet(); } });
       shortcuts.after(side);
     }
-    const content = document.querySelector('[class*="settings-content"] [class*="sections-container"]');
+    const content = document.querySelector('[class*="settings-content"] [class*="sections-container"]')
+      || document.querySelector('[class*="settings-content"] [class*="pane-"] [class*="page-container"] > [class*="page-"]');
     if (!content || content.querySelector(".dxtv-settings-entry")) return;
     ensureStyle();
     const entry = document.createElement("button");
@@ -467,7 +482,9 @@
     support.className = "dxtv-row dxtv-settings-entry";
     support.innerHTML = `<span>Support dx.bi<small>dx.bi is free. If you enjoy it, you can buy its developer a coffee</small></span><b>Open</b>`;
     support.addEventListener("click", donate);
-    content.prepend(entry, who, layout, server, problem, support);
+    const head = content.querySelector(':scope > [class*="head-"]');
+    if (head) head.after(entry, who, layout, server, problem, support);
+    else content.prepend(entry, who, layout, server, problem, support);
   }
 
   // ---------------------------------------------------------------------------
@@ -795,6 +812,8 @@
       next: nextLink(state) ? { title: nextTitle(state.nextVideo), thumbnail: state.nextVideo.thumbnail || "" } : null,
       upNext: (dx && dx.settings && dx.settings.upNext) || "10",
       audioLanguage: profile.audioLanguage || "",
+      // Which source this is, so the player can start it in the audio track picked last time
+      sourceKey: stream.infoHash ? `${stream.infoHash}/${Number.isInteger(stream.fileIdx) ? stream.fileIdx : -1}` : String((stream.behaviorHints && stream.behaviorHints.filename) || (url || "").split("?")[0]),
       // (empty: subtitles start off)
       subtitleLanguage,
       // Stremio's subtitle settings (Settings → Player), drawn the same way by the native player
@@ -1158,13 +1177,112 @@
     if (/^#\/search\?search=./.test(location.hash) && document.activeElement && document.activeElement.tagName !== "INPUT") resultsFirst();
   }
 
+  // Settings: Left from a page goes to its menu. The remote moves to the nearest thing that way, and
+  // the menu sits so far left that a page's own controls (the zoom slider) always won
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" || !/^#\/settings/.test(location.hash)) return;
+    const f = document.activeElement;
+    if (!f || !f.closest('[class*="settings-content"] [class*="pane-"]')) return;
+    if (f.matches('input[type="range"], input[type="text"], input[type="search"], textarea, [role="slider"]')) return;
+    // (a row of buttons side by side still moves along the row: only the leftmost goes to the menu)
+    const r = f.getBoundingClientRect();
+    const row = f.parentElement ? [...f.parentElement.querySelectorAll('a, button, [tabindex="0"]')] : [];
+    if (row.some((n) => n !== f && Math.abs(n.getBoundingClientRect().top - r.top) < 4 && n.getBoundingClientRect().right <= r.left + 2)) return;
+    const menu = document.querySelector('[class*="settings-content"] nav[class*="menu-"]');
+    const target = menu && (menu.querySelector('a[class*="selected"]') || menu.querySelector('a[class*="item-"]'));
+    if (!target) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    target.focus({ preventScroll: false });
+  }, true);
+
+  // ---------------------------------------------------------------------------
+  // Sign in with a phone: Stremio's link codes (link.stremio.com, the same service the official
+  // TV app uses). The TV shows a QR and a short code; approved on a phone that's signed in, the
+  // TV gets the account's key and signs in with it. No typing on the remote.
+  // ---------------------------------------------------------------------------
+  const LINK_API = "https://link.stremio.com/api/v2";
+  const linkCall = async (path) => {
+    const r = await fetch(`${LINK_API}/${path}`, { cache: "no-store" });
+    const body = await r.json();
+    return body && body.result !== undefined ? body.result : body;
+  };
+  const qrSource = (q) => {
+    const v = String(q || "");
+    if (!v) return "";
+    if (/^data:|^https?:/.test(v)) return v;
+    if (/^<svg/i.test(v.trim())) return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(v)}`;
+    return `data:image/png;base64,${v}`;
+  };
+  function coreDispatch() {
+    const live = window.core || (window.services && window.services.core) || window.__permanentCore;
+    return live && typeof live.dispatch === "function" ? live.dispatch.bind(live) : null;
+  }
+  async function qrLogin() {
+    let link;
+    try { link = await linkCall("create?type=Create"); } catch (_) { link = null; }
+    if (!link || !link.code) { toast("Couldn't get a sign-in code from Stremio. Try again in a moment."); return; }
+    let stop = false;
+    const shown = dialog({
+      title: "Sign in with your phone",
+      message: `Scan the code with your phone, or go to ${String(link.link || "link.stremio.com").replace(/^https?:\/\//, "")}, and approve it while signed in to Stremio.`,
+      qrImage: qrSource(link.qrcode),
+      buttons: ["Cancel"],
+      onOpen: (el, finish) => {
+        const code = document.createElement("span");
+        code.className = "dxtv-code";
+        code.textContent = link.code;
+        el.querySelector(".dxtv-buttons").before(code);
+        const started = Date.now();
+        const poll = async () => {
+          if (stop || !el.isConnected) return;
+          // (a code lasts a few minutes: after ten, start over)
+          if (Date.now() - started > 10 * 60 * 1000) { finish(-1); toast("The sign-in code ran out. Choose Sign in with your phone again."); return; }
+          let read = null;
+          try { read = await linkCall(`read?type=Read&code=${encodeURIComponent(link.code)}`); } catch (_) { /* not approved yet */ }
+          if (stop || !el.isConnected) return;
+          if (read && read.authKey) {
+            const dispatch = coreDispatch();
+            if (!dispatch) { finish(-1); toast("Signed in on Stremio, but the app wasn't ready. Try again."); return; }
+            dispatch({ action: "Ctx", args: { action: "Authenticate", args: { type: "LoginWithToken", token: read.authKey } } });
+            finish(0);
+            toast("Signed in");
+            setTimeout(() => { if (/^#\/intro/.test(location.hash)) location.hash = "#/"; }, 2500);
+            return;
+          }
+          setTimeout(poll, 3000);
+        };
+        setTimeout(poll, 3000);
+      },
+    });
+    await shown;
+    stop = true;
+  }
+  function ensureQrLogin() {
+    // the sign-in page (#/intro), or any page showing Stremio's email and password form
+    const onIntro = /^#\/intro/.test(location.hash) || !!document.querySelector('input[type="password"]');
+    const btn = document.querySelector(".dxtv-qr-login");
+    if (!onIntro) { if (btn) btn.remove(); return; }
+    if (btn) return;
+    const b = document.createElement("button");
+    b.className = "dxtv-qr-login";
+    b.textContent = "Sign in with your phone";
+    b.addEventListener("click", () => qrLogin());
+    document.body.append(b);
+    // (the remote starts on it: the quickest way in, and a button in a corner is easy to miss)
+    const at = document.activeElement;
+    if (!at || at === document.body || !(at.value || "").length) b.focus({ preventScroll: true });
+  }
+
   window.addEventListener("hashchange", onRoute);
+  window.addEventListener("hashchange", ensureQrLogin);
   const start = () => {
     ensureStyle();
     loadPlugin();
     resumePlayback();
     onRoute();
-    new MutationObserver(ensureSettingsEntry).observe(document.body, { childList: true, subtree: true });
+    ensureQrLogin();
+    new MutationObserver(() => { ensureSettingsEntry(); ensureQrLogin(); }).observe(document.body, { childList: true, subtree: true });
   };
   if (document.readyState === "complete") start();
   else window.addEventListener("load", start);

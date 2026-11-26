@@ -25,6 +25,8 @@ interface Controls {
     val visible: Boolean
     val panelOpen: Boolean
     fun show()
+    /** Shows the timeline with the remote on it, to move along it */
+    fun scrub() = show()
     fun hide()
     /** Pressing anything keeps them up a while longer */
     fun poke()
@@ -67,7 +69,18 @@ class PlayerControls(
     private val handler = Handler(Looper.getMainLooper())
     private var opener: View? = null
     private var lastFocus: View = play
-    private var stats: TextView? = null
+    private var stats: List<TextView>? = null
+    private var panelWidth = 0
+    private var panelStart = 0
+    // what the stats panel reports that the player only tells as it happens
+    private var videoDecoder = ""
+    private var audioDecoder = ""
+    private var audioOut = ""
+    private var bandwidth = 0L
+    private var stalls = 0
+    private var wasReady = false
+    private val opened = android.os.SystemClock.elapsedRealtime()
+    private var firstFrameMs = -1L
 
     private val hide = Runnable { if (!panelOpen) hide() }
     private val tick = object : Runnable {
@@ -77,16 +90,44 @@ class PlayerControls(
         }
     }
 
-    private val buttons = listOf(R.id.ctl_play, R.id.ctl_rewind, R.id.ctl_forward, R.id.ctl_next, R.id.ctl_stats, R.id.ctl_picture, R.id.ctl_speed, R.id.ctl_subtitles, R.id.ctl_audio, R.id.ctl_party)
+    private val buttons = listOf(R.id.ctl_play, R.id.ctl_restart, R.id.ctl_rewind, R.id.ctl_forward, R.id.ctl_next, R.id.ctl_stats, R.id.ctl_picture, R.id.ctl_speed, R.id.ctl_subtitles, R.id.ctl_audio, R.id.ctl_external, R.id.ctl_party)
         .map { activity.findViewById<View>(it) }
 
     override val visible get() = root.visibility == View.VISIBLE
     override val panelOpen get() = panel.visibility == View.VISIBLE
 
     init {
+        exo.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onVideoDecoderInitialized(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { videoDecoder = decoderName }
+            override fun onAudioDecoderInitialized(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { audioDecoder = decoderName }
+            override fun onAudioTrackInitialized(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, audioTrackConfig: androidx.media3.exoplayer.audio.AudioSink.AudioTrackConfig) {
+                val enc = when (audioTrackConfig.encoding) {
+                    C.ENCODING_AC3 -> "Dolby Digital (passthrough)"
+                    C.ENCODING_E_AC3 -> "Dolby Digital+ (passthrough)"
+                    C.ENCODING_E_AC3_JOC -> "Dolby Digital+ Atmos (passthrough)"
+                    C.ENCODING_DTS -> "DTS (passthrough)"
+                    C.ENCODING_DTS_HD -> "DTS-HD (passthrough)"
+                    C.ENCODING_DOLBY_TRUEHD -> "TrueHD (passthrough)"
+                    C.ENCODING_PCM_16BIT -> "PCM 16-bit (decoded)"
+                    C.ENCODING_PCM_FLOAT -> "PCM float (decoded)"
+                    else -> "encoding ${audioTrackConfig.encoding}"
+                }
+                val ch = Integer.bitCount(audioTrackConfig.channelConfig)
+                audioOut = "$enc · ${channelName(ch)} · ${audioTrackConfig.sampleRate / 1000} kHz" + (if (audioTrackConfig.tunneling) " · tunneled" else "")
+            }
+            override fun onBandwidthEstimate(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, totalLoadTimeMs: Int, totalBytesLoaded: Long, bitrateEstimate: Long) { bandwidth = bitrateEstimate }
+            override fun onRenderedFirstFrame(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
+                if (firstFrameMs < 0) firstFrameMs = android.os.SystemClock.elapsedRealtime() - opened
+            }
+            override fun onPlaybackStateChanged(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, state: Int) {
+                if (state == androidx.media3.common.Player.STATE_READY) wasReady = true
+                else if (state == androidx.media3.common.Player.STATE_BUFFERING && wasReady) stalls++
+            }
+        })
         line.accent = accent
         click(R.id.ctl_back) { leave(false) }
         click(R.id.ctl_play) { exo.playWhenReady = !exo.playWhenReady; paint() }
+        click(R.id.ctl_restart) { exo.seekTo(0L); exo.play(); paint() }
         click(R.id.ctl_rewind) { seek(-1); paint() }
         click(R.id.ctl_forward) { seek(+1); paint() }
         click(R.id.ctl_next) { leave(true) }
@@ -97,6 +138,7 @@ class PlayerControls(
         click(R.id.ctl_subtitles) { showTracks(it, C.TRACK_TYPE_TEXT, "Subtitles") }
         click(R.id.ctl_audio) { showTracks(it, C.TRACK_TYPE_AUDIO, "Audio") }
         click(R.id.ctl_party) { showParty(it) }
+        click(R.id.ctl_external) { showPlayers(it) }
         // Phones: a tap shows or hides them, and the bar can be touched
         playerView.setOnClickListener { if (visible) hide() else show() }
         root.setOnClickListener { hide() }
@@ -107,13 +149,37 @@ class PlayerControls(
             poke()
             true
         }
+        // Left/Right on the timeline: a press moves 10 s; held, it speeds up (5 s, 15 s, 30 s, then a minute
+        // a step), and the video jumps there when the key is let go
         line.setOnKeyListener { _, code, event ->
-            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-            when (code) {
-                KeyEvent.KEYCODE_DPAD_LEFT -> { seek(-1); paint(); true }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> { seek(+1); paint(); true }
-                else -> false
+            val direction = when (code) {
+                KeyEvent.KEYCODE_DPAD_LEFT -> -1
+                KeyEvent.KEYCODE_DPAD_RIGHT -> +1
+                else -> return@setOnKeyListener false
             }
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    val held = event.eventTime - event.downTime
+                    val step = when {
+                        event.repeatCount == 0 -> 10_000L
+                        held < 1_500 -> 5_000L
+                        held < 3_000 -> 15_000L
+                        held < 5_000 -> 30_000L
+                        else -> 60_000L
+                    }
+                    val duration = exo.duration.takeIf { it != C.TIME_UNSET && it > 0 }
+                    var target = ((scrubTo ?: exo.currentPosition) + direction * step).coerceAtLeast(0L)
+                    if (duration != null) target = target.coerceAtMost((duration - 1_000L).coerceAtLeast(0L))
+                    scrubTo = target
+                }
+                KeyEvent.ACTION_UP -> {
+                    scrubTo?.let { exo.seekTo(it) }
+                    scrubTo = null
+                }
+            }
+            paint()
+            poke()
+            true
         }
     }
 
@@ -139,8 +205,24 @@ class PlayerControls(
     private fun click(id: Int, action: (View) -> Unit) {
         activity.findViewById<View>(id).apply {
             setOnClickListener { action(it) }
-            setOnFocusChangeListener { view, has -> if (has) lastFocus = view }
+            setOnFocusChangeListener { view, has ->
+                if (has) lastFocus = view
+                // (each icon's name shows while it has focus)
+                activity.findViewById<TextView>(R.id.ctl_hint)?.takeIf { it.tag != "plain" }?.apply {
+                    text = if (has) view.contentDescription else ""
+                    visibility = if (has && !view.contentDescription.isNullOrEmpty()) View.VISIBLE else View.GONE
+                }
+            }
         }
+    }
+
+    /** Where the timeline is being moved to (the video jumps there when the key is let go) */
+    private var scrubTo: Long? = null
+
+    override fun scrub() {
+        show()
+        line.isFocusable = true
+        line.requestFocus()
     }
 
     override fun show() {
@@ -176,11 +258,12 @@ class PlayerControls(
     fun paint() {
         play.setImageResource(if (exo.playWhenReady) R.drawable.ic_pause else R.drawable.ic_play)
         val duration = exo.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
-        timeNow.text = time(exo.currentPosition)
-        timeLeft.text = if (duration > 0) "-" + time(duration - exo.currentPosition) else "--:--"
-        line.played = if (duration > 0) exo.currentPosition.toFloat() / duration else 0f
+        val at = scrubTo ?: exo.currentPosition
+        timeNow.text = time(at)
+        timeLeft.text = if (duration > 0) "-" + time(duration - at) else "--:--"
+        line.played = if (duration > 0) at.toFloat() / duration else 0f
         line.loaded = if (duration > 0) exo.bufferedPosition.toFloat() / duration else 0f
-        stats?.let { it.text = statsText() }
+        stats?.let { cols -> statsColumns(cols.size).forEachIndexed { i, t -> cols[i].text = t } }
     }
 
     private fun time(ms: Long): String {
@@ -208,6 +291,7 @@ class PlayerControls(
     override fun closePanel(): Boolean {
         if (!panelOpen) return false
         panel.visibility = View.GONE
+        if (stats != null) panel.layoutParams = (panel.layoutParams as android.widget.FrameLayout.LayoutParams).apply { width = panelWidth; marginStart = panelStart }
         stats = null
         panelRows.removeAllViews()
         opener?.requestFocus()
@@ -230,8 +314,12 @@ class PlayerControls(
         panelRows.addView(this)
     }
 
-    private fun row(text: String, on: Boolean, keepOpen: Boolean = false, action: () -> Unit): TextView = TextView(activity).apply {
+    /** Track rows: picking one switches straight away and the menu stays open, to try the next */
+    private val pickRows = mutableListOf<TextView>()
+
+    private fun row(text: String, on: Boolean, keepOpen: Boolean = false, pick: Boolean = false, action: () -> Unit): TextView = TextView(activity).apply {
         this.text = if (on) "✓  $text" else text
+        if (pick) { contentDescription = text; pickRows.add(this) }
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
         gravity = Gravity.CENTER_VERTICAL
         minHeight = dp(42)
@@ -242,7 +330,12 @@ class PlayerControls(
         setOnFocusChangeListener { view, has ->
             (view as TextView).setTextColor(if (has) Color.BLACK else if (on) Color.WHITE else Color.argb(204, 255, 255, 255))
         }
-        setOnClickListener { action(); if (!keepOpen) closePanel() }
+        setOnClickListener {
+            action()
+            if (pick) for (r in pickRows) r.text = if (r === this) "✓  ${r.contentDescription}" else r.contentDescription
+            else if (!keepOpen) closePanel()
+            poke()
+        }
         panelRows.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         tag = if (on) "on" else null
     }
@@ -304,6 +397,7 @@ class PlayerControls(
 
     private fun showTracks(from: View, type: Int, title: String) {
         openPanel(from, title)
+        pickRows.clear()
         val groups = exo.currentTracks.groups.filter { it.type == type }
         val anySelected = groups.any { it.isSelected }
         if (type == C.TRACK_TYPE_TEXT && anySelected) {
@@ -315,7 +409,7 @@ class PlayerControls(
         }
         if (type == C.TRACK_TYPE_TEXT) {
             if (anySelected) heading("Track")
-            row("Off", !anySelected) {
+            row("Off", !anySelected, pick = true) {
                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                     .clearOverridesOfType(type).setTrackTypeDisabled(type, true).build()
             }
@@ -334,14 +428,51 @@ class PlayerControls(
                 row("$name$channels$kind · can't play here", false) {}
                 continue
             }
-            row(name + channels + kind, group.isTrackSelected(i)) {
+            row(name + channels + kind, group.isTrackSelected(i), pick = true) {
                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                     .setTrackTypeDisabled(type, false)
                     .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, i))
                     .build()
+                if (type == C.TRACK_TYPE_AUDIO) AudioMemory.save(activity, activity.sourceKey, format)
             }
         }
         if (number == 0 && type == C.TRACK_TYPE_AUDIO) row("No other audio", false) {}
+        focusFirst()
+    }
+
+    /** Hands the video, and where it is, to another player (VLC or whichever you pick) */
+    /** The video, for another player: from where it is now (VLC and MX Player start from "position") */
+    private fun elsewhereIntent(): android.content.Intent? {
+        val stream = org.json.JSONObject(activity.intent.getStringExtra(PlayerActivity.EXTRA_STREAM) ?: "{}")
+        val url = stream.optString("url")
+        if (url.isEmpty()) return null
+        return android.content.Intent(android.content.Intent.ACTION_VIEW)
+            .setDataAndType(android.net.Uri.parse(url), "video/*")
+            .putExtra("title", stream.optString("title"))
+            .putExtra("position", exo.currentPosition)
+            .putExtra("from_start", false)
+    }
+
+    /** The players on this TV that can take the video, in the same panel as subtitles and audio */
+    private fun showPlayers(from: View) {
+        val intent = elsewhereIntent() ?: return
+        val pm = activity.packageManager
+        val players = pm.queryIntentActivities(intent, 0)
+            .filter { it.activityInfo.packageName != activity.packageName }
+            .distinctBy { it.activityInfo.packageName }
+            .sortedBy { it.loadLabel(pm).toString().lowercase() }
+        openPanel(from, "Play in another player")
+        if (players.isEmpty()) row("No other video player is installed", false) {}
+        for (p in players) {
+            row(p.loadLabel(pm).toString(), false) {
+                exo.playWhenReady = false
+                paint()
+                val go = elsewhereIntent() ?: return@row
+                go.setClassName(p.activityInfo.packageName, p.activityInfo.name)
+                try { activity.startActivity(go) }
+                catch (_: Exception) { android.widget.Toast.makeText(activity, "That player couldn't open it", android.widget.Toast.LENGTH_LONG).show() }
+            }
+        }
         focusFirst()
     }
 
@@ -361,32 +492,174 @@ class PlayerControls(
         else -> "$count channels"
     }
 
+    /** Stream stats as a wide sheet in columns, so every section shows at once (one column on a narrow screen) */
     private fun showStats(from: View) {
         openPanel(from, "Stream stats")
-        val text = TextView(activity).apply {
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setLineSpacing(0f, 1.35f)
-            setPadding(dp(12), 0, dp(12), dp(10))
-            isFocusable = true
+        val wide = activity.resources.configuration.screenWidthDp >= 720
+        val lp = panel.layoutParams as android.widget.FrameLayout.LayoutParams
+        panelWidth = lp.width; panelStart = lp.marginStart
+        if (wide) panel.layoutParams = lp.apply { width = ViewGroup.LayoutParams.MATCH_PARENT; marginStart = marginEnd }
+        val count = if (wide) 3 else 1
+        val holder = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL; isFocusable = true }
+        val cols = List(count) {
+            TextView(activity).apply {
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setLineSpacing(0f, 1.2f)
+                setPadding(dp(12), 0, dp(12), dp(10))
+                holder.addView(this, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
         }
-        panelRows.addView(text)
-        stats = text
-        text.requestFocus()
+        panelRows.addView(holder, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        stats = cols
+        holder.requestFocus()
         paint()
+    }
+
+    /** The sections, spread over the columns: picture | sound | network and the TV */
+    private fun statsColumns(count: Int): List<String> {
+        val s = statsText().split("\n\n")
+        if (count == 1) return listOf(s.joinToString("\n\n"))
+        val v = s.filter { it.startsWith("— VIDEO") || it.startsWith("— DISPLAY") }
+        val a = s.filter { it.startsWith("— AUDIO") }
+        val rest = s - v.toSet() - a.toSet()
+        return listOf(v, a, rest).map { it.joinToString("\n\n") }
     }
 
     private fun statsText(): String {
         val video = exo.videoFormat
         val audio = exo.audioFormat
-        fun codec(mime: String?) = mime?.substringAfter('/')?.removePrefix("x-")?.uppercase() ?: "—"
+        fun codec(mime: String?) = when (mime) {
+            null -> "—"
+            MimeTypes.VIDEO_H265 -> "HEVC"
+            MimeTypes.VIDEO_H264 -> "H.264"
+            MimeTypes.VIDEO_AV1 -> "AV1"
+            MimeTypes.VIDEO_VP9 -> "VP9"
+            MimeTypes.VIDEO_DOLBY_VISION -> "Dolby Vision"
+            else -> mime.substringAfter('/').removePrefix("x-").uppercase()
+        }
+        fun mbps(bits: Int) = "%.1f Mbps".format(bits / 1_000_000f)
         val lines = mutableListOf<String>()
-        lines += "Picture  " + (if (video != null) "${video.width} × ${video.height}" else "—")
-        lines += "Video  " + codec(video?.sampleMimeType) + (video?.frameRate?.takeIf { it > 0 }?.let { " · %.0f fps".format(it) } ?: "")
-        lines += "Audio  " + codec(audio?.sampleMimeType) + (audio?.channelCount?.takeIf { it > 0 }?.let { " · " + channelName(it) } ?: "")
-        (video?.bitrate?.takeIf { it > 0 })?.let { lines += "Bitrate  %.1f Mbps".format(it / 1_000_000f) }
-        lines += "Buffered  %.0f s".format(exo.totalBufferedDuration / 1000f)
+
+        lines += "— VIDEO —"
+        if (video != null) {
+            val c = video.colorInfo
+            val picture = when {
+                video.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION || video.codecs?.startsWith("dv") == true -> "Dolby Vision" + (video.codecs?.let { Regex("""dv\w{2}\.(\d+)""").find(it)?.groupValues?.get(1)?.let { p -> " P${p.toInt()}" } } ?: "")
+                c?.colorTransfer == C.COLOR_TRANSFER_ST2084 -> "HDR10"
+                c?.colorTransfer == C.COLOR_TRANSFER_HLG -> "HLG"
+                else -> "SDR"
+            }
+            val res = when { video.height >= 2000 || video.width >= 3500 -> "4K"; video.height > 0 -> "${maxOf(video.height, video.width * 9 / 16)}p"; else -> null }
+            val fps = video.frameRate.takeIf { it > 0 }?.let { "%.3f fps".format(it).replace(Regex("""\.?0+ fps"""), " fps") }
+            lines += listOfNotNull(res, codec(video.sampleMimeType), picture, fps).joinToString(" · ")
+            val space = when (c?.colorSpace) { C.COLOR_SPACE_BT2020 -> "BT.2020"; C.COLOR_SPACE_BT709 -> "BT.709"; C.COLOR_SPACE_BT601 -> "BT.601"; else -> null }
+            val depth = c?.lumaBitdepth?.takeIf { it > 0 }?.let { "$it-bit" }
+            val rate = listOfNotNull(
+                video.averageBitrate.takeIf { it > 0 }?.let { "avg ${mbps(it)}" },
+                video.peakBitrate.takeIf { it > 0 }?.let { "peak ${mbps(it)}" },
+                video.bitrate.takeIf { it > 0 && video.averageBitrate <= 0 }?.let { mbps(it) },
+            )
+            lines += (listOf("${video.width} × ${video.height}") + listOfNotNull(space, depth) + rate).joinToString(" · ")
+        } else lines += "—"
+        if (videoDecoder.isNotEmpty()) lines += "Decoder " + videoDecoder + (if (videoDecoder.startsWith("c2.android") || videoDecoder.startsWith("OMX.google")) " (software)" else " (hardware)")
+        exo.videoDecoderCounters?.let { d ->
+            d.ensureUpdated()
+            lines += "Frames ${d.renderedOutputBufferCount} shown · ${d.droppedBufferCount} dropped" + (if (d.skippedOutputBufferCount > 0) " · ${d.skippedOutputBufferCount} skipped" else "")
+        }
+
+        lines += ""
+        lines += "— AUDIO —"
+        val live = TvAudioSink.live
+        if (audio != null) {
+            lines += codec(audio.sampleMimeType).let { if (audio.sampleMimeType == MimeTypes.AUDIO_E_AC3_JOC) "E-AC3 Atmos" else it } +
+                (audio.channelCount.takeIf { it > 0 }?.let { " " + channelName(it) } ?: "") +
+                (audio.sampleRate.takeIf { it > 0 }?.let { " · ${it / 1000} kHz" } ?: "") +
+                (audio.bitrate.takeIf { it > 0 }?.let { " · ${it / 1000} kbps" } ?: "")
+            listOfNotNull(audio.language, audio.label).filter { it.isNotEmpty() && it != "und" }.takeIf { it.isNotEmpty() }?.let { lines += "Track " + it.joinToString(" · ") }
+        } else lines += "—"
+        // what the soundbar gets: converted live, or as the TV sends it
+        if (live.isNotEmpty()) lines += "→ To the TV: " + live.replace(" (encoded live from", " (live from") else if (audioOut.isNotEmpty()) lines += "→ To the TV: $audioOut"
+        if (audioDecoder.isNotEmpty()) lines += "Decoder $audioDecoder"
+        val audioTracks = exo.currentTracks.groups.count { it.type == C.TRACK_TYPE_AUDIO }
+        val textTracks = exo.currentTracks.groups.count { it.type == C.TRACK_TYPE_TEXT }
+        lines += "Tracks $audioTracks audio · $textTracks subtitles"
+        exo.currentTracks.groups.firstOrNull { it.type == C.TRACK_TYPE_TEXT && it.isSelected }?.let { g ->
+            val f = (0 until g.length).firstOrNull { g.isTrackSelected(it) }?.let { g.getTrackFormat(it) }
+            if (f != null) lines += "Subtitles " + listOfNotNull(f.language, f.label, f.sampleMimeType?.substringAfter('/')).filter { it.isNotEmpty() }.joinToString(" · ")
+        }
+
+        lines += ""
+        lines += "— NETWORK —"
+        // seconds of video downloaded ahead of what's playing, against the 50 s the player fills up to (Media3's default)
+        val ahead = exo.totalBufferedDuration / 1000f
+        val full = (ahead / 50f * 16).toInt().coerceIn(0, 16)
+        lines += "Buffer [" + "■".repeat(full) + "·".repeat(16 - full) + "] %.1f of 50 s".format(ahead)
+        if (bandwidth > 0) lines += "Download %.0f Mbps".format(bandwidth / 1_000_000f)
+        lines += "Stalls $stalls" + (if (firstFrameMs >= 0) " · started in %.1f s".format(firstFrameMs / 1000f) else "")
+        val stream = org.json.JSONObject(activity.intent.getStringExtra(PlayerActivity.EXTRA_STREAM) ?: "{}")
+        listOfNotNull(android.net.Uri.parse(stream.optString("url")).host, video?.containerMimeType?.substringAfter('/')?.removePrefix("x-"))
+            .takeIf { it.isNotEmpty() }?.let { lines += "From " + it.joinToString(" · ") }
+
+        lines += ""
+        lines += "— DISPLAY —"
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            activity.display?.let { d ->
+                val m = d.mode
+                val hdr = d.hdrCapabilities?.supportedHdrTypes?.map {
+                    when (it) { 1 -> "DV"; 2 -> "HDR10"; 3 -> "HLG"; 4 -> "HDR10+"; else -> "type $it" }
+                }.orEmpty()
+                lines += "${m.physicalWidth} × ${m.physicalHeight} · %.0f Hz".format(m.refreshRate) + (if (hdr.isNotEmpty()) " · " + hdr.joinToString(", ") else "")
+            }
+        }
+        lines += ""
+        lines += "— THE TV —"
+        lines += deviceLines()
         return lines.joinToString("\n")
+    }
+
+    // ---- What Marquee costs the TV: memory, CPU, GPU ----
+    private var cpuTicks = -1L
+    private var pss = 0L
+    private var pssAt = 0L
+    private var cpuAt = 0L
+
+    private fun deviceLines(): List<String> {
+        val out = mutableListOf<String>()
+        val am = activity.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val mi = android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+        val t = android.os.SystemClock.elapsedRealtime()
+        if (t - pssAt > 3000) { pss = android.os.Debug.getPss() * 1024L; pssAt = t } // (slow to read: every 3 s)
+        val mine = pss // this app's own share (PSS)
+        val total = mi.totalMem
+        val free = mi.availMem
+        val others = (total - free - mine).coerceAtLeast(0)
+        fun mb(b: Long) = "%,d MB".format(b / 1_048_576)
+        // a bar of 30: Marquee ■, everything else ▒, free ·
+        val n = 20
+        val a = (mine * n / total).toInt().coerceIn(if (mine > 0) 1 else 0, n)
+        val b = (others * n / total).toInt().coerceIn(0, n - a)
+        out += "Memory [" + "■".repeat(a) + "▒".repeat(b) + "·".repeat(n - a - b) + "]"
+        out += "■ Marquee ${mb(mine)} · ▒ others ${mb(others)}"
+        out += "· free ${mb(free)} of ${mb(total)}"
+        // CPU: this app's share of all cores since the last look (the TV keeps other apps' figures private)
+        try {
+            val f = java.io.File("/proc/self/stat").readText().substringAfterLast(')').trim().split(' ')
+            val ticks = f[11].toLong() + f[12].toLong() // utime + stime
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (cpuTicks >= 0 && now > cpuAt) {
+                val hz = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK).coerceAtLeast(1)
+                val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+                val pct = (ticks - cpuTicks) * 1000.0 / hz / (now - cpuAt) * 100 / cores
+                out += "CPU %.0f%% of %d cores".format(pct, cores)
+            } else out += "CPU measuring…"
+            cpuTicks = ticks; cpuAt = now
+        } catch (_: Exception) { out += "CPU not readable" }
+        // GPU: Mali reports its load in sysfs, where the TV lets apps read it
+        val gpu = listOf("/sys/kernel/gpu/gpu_busy", "/sys/class/misc/mali0/device/utilization", "/sys/devices/platform/mali/utilization", "/proc/mali/utilization")
+            .firstNotNullOfOrNull { path -> try { java.io.File(path).readText().trim().takeIf { it.isNotEmpty() } } catch (_: Exception) { null } }
+        out += if (gpu != null) "GPU busy ${gpu.filter { it.isDigit() }.take(3)}%" else "GPU load not readable"
+        return out
     }
 
     private companion object {
