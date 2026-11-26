@@ -105,15 +105,15 @@ class TitleActivity : AppCompatActivity() {
         // the title's own logo art when it has one (as Netflix shows), else its name
         logo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_START; adjustViewBounds = true; visibility = View.GONE }
         left.addView(logo, LinearLayout.LayoutParams(dp(380), dp(96)).apply { topMargin = dp(16) })
-        title = label("", 32f, bold = true, lines = 2)
-        left.addView(title, LinearLayout.LayoutParams(dp(500), LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) })
+        title = label("", 30f, bold = true, lines = 3).apply { ellipsize = android.text.TextUtils.TruncateAt.END }
+        left.addView(title, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) })
         metaLine = label("", 13f, Ui.MUTED)
         left.addView(metaLine, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         desc = label("", 14f, lines = 4).apply { setLineSpacing(0f, 1.15f) }
-        left.addView(desc, LinearLayout.LayoutParams(dp(500), LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+        left.addView(desc, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
         // Starring, Director, Writers, Country, Awards
         facts = label("", 12f, Ui.MUTED, lines = 5).apply { setLineSpacing(0f, 1.25f) }
-        left.addView(facts, LinearLayout.LayoutParams(dp(500), LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+        left.addView(facts, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
         buttonsRow = buttons
@@ -184,7 +184,7 @@ class TitleActivity : AppCompatActivity() {
         val viewport = FrameLayout(this).apply { clipChildren = true; clipToPadding = true }
         viewport.addView(list, match())
         right.addView(viewport, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
-        body.addView(right, LinearLayout.LayoutParams(dp(400), LinearLayout.LayoutParams.MATCH_PARENT))
+        body.addView(right, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         root.addView(body, match())
         setContentView(root)
         root.viewTreeObserver.addOnGlobalFocusChangeListener { _, now ->
