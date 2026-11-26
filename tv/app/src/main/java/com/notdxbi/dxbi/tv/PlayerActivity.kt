@@ -538,11 +538,8 @@ class PlayerActivity : AppCompatActivity() {
         val duration = exo.duration.takeIf { it != C.TIME_UNSET }
         val target = (exo.currentPosition + direction * stepMs).coerceAtLeast(0L).let { if (duration != null) it.coerceAtMost(duration) else it }
         exo.seekTo(target)
-        val step = if (stepMs >= 60_000L) "${stepMs / 60_000L} min" else "${stepMs / 1000L} s"
-        seekFlash.text = if (direction > 0) "+$step   ${clock(target)}" else "−$step   ${clock(target)}"
-        seekFlash.visibility = View.VISIBLE
-        handler.removeCallbacks(hideFlash)
-        handler.postDelayed(hideFlash, 900)
+        // No pop-up: the controls come up with the timeline, which shows where it went
+        if (::controls.isInitialized) controls.scrub()
     }
 
     private fun report() {
