@@ -100,7 +100,7 @@ class PlayerControls(
         click(R.id.ctl_subtitles) { showTracks(it, C.TRACK_TYPE_TEXT, "Subtitles") }
         click(R.id.ctl_audio) { showTracks(it, C.TRACK_TYPE_AUDIO, "Audio") }
         click(R.id.ctl_party) { showParty(it) }
-        click(R.id.ctl_external) { openElsewhere() }
+        click(R.id.ctl_external) { showPlayers(it) }
         // Phones: a tap shows or hides them, and the bar can be touched
         playerView.setOnClickListener { if (visible) hide() else show() }
         root.setOnClickListener { hide() }
@@ -402,21 +402,39 @@ class PlayerControls(
     }
 
     /** Hands the video, and where it is, to another player (VLC or whichever you pick) */
-    private fun openElsewhere() {
+    /** The video, for another player: from where it is now (VLC and MX Player start from "position") */
+    private fun elsewhereIntent(): android.content.Intent? {
         val stream = org.json.JSONObject(activity.intent.getStringExtra(PlayerActivity.EXTRA_STREAM) ?: "{}")
         val url = stream.optString("url")
-        if (url.isEmpty()) return
-        exo.playWhenReady = false
-        paint()
-        val view = android.content.Intent(android.content.Intent.ACTION_VIEW)
+        if (url.isEmpty()) return null
+        return android.content.Intent(android.content.Intent.ACTION_VIEW)
             .setDataAndType(android.net.Uri.parse(url), "video/*")
             .putExtra("title", stream.optString("title"))
-            .putExtra("position", exo.currentPosition) // VLC and MX Player start from here
+            .putExtra("position", exo.currentPosition)
             .putExtra("from_start", false)
-        try { activity.startActivity(android.content.Intent.createChooser(view, "Play with")) }
-        catch (_: android.content.ActivityNotFoundException) {
-            android.widget.Toast.makeText(activity, "No other video player is installed", android.widget.Toast.LENGTH_LONG).show()
+    }
+
+    /** The players on this TV that can take the video, in the same panel as subtitles and audio */
+    private fun showPlayers(from: View) {
+        val intent = elsewhereIntent() ?: return
+        val pm = activity.packageManager
+        val players = pm.queryIntentActivities(intent, 0)
+            .filter { it.activityInfo.packageName != activity.packageName }
+            .distinctBy { it.activityInfo.packageName }
+            .sortedBy { it.loadLabel(pm).toString().lowercase() }
+        openPanel(from, "Play in another player")
+        if (players.isEmpty()) row("No other video player is installed", false) {}
+        for (p in players) {
+            row(p.loadLabel(pm).toString(), false) {
+                exo.playWhenReady = false
+                paint()
+                val go = elsewhereIntent() ?: return@row
+                go.setClassName(p.activityInfo.packageName, p.activityInfo.name)
+                try { activity.startActivity(go) }
+                catch (_: Exception) { android.widget.Toast.makeText(activity, "That player couldn't open it", android.widget.Toast.LENGTH_LONG).show() }
+            }
         }
+        focusFirst()
     }
 
     private fun audioKind(mime: String?) = when (mime) {
