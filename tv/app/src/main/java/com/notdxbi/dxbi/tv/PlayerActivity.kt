@@ -157,6 +157,39 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var loading: View
     private lateinit var loadingWords: TextView
     @Volatile private var busyUntil = 0L
+    // What arrives from the source while the picture waits: whether the server has sent anything
+    // yet (Easynews can take a while to start a file it hasn't served lately), and how fast
+    private val bytesIn = java.util.concurrent.atomic.AtomicLong()
+    private var lastBytes = 0L
+    private var lastBytesAt = 0L
+    private var rate = 0.0 // bytes a second, smoothed
+    private val fromEasynews by lazy {
+        val st = try { JSONObject(intent.getStringExtra(EXTRA_STREAM) ?: "{}") } catch (_: Exception) { JSONObject() }
+        Uri.parse(st.optString("url")).host.orEmpty().contains("easynews", true) || st.optString("url").contains("easynews", true) ||
+            st.optString("provider").contains("easynews", true)
+    }
+    private val received = object : androidx.media3.datasource.TransferListener {
+        override fun onTransferInitializing(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+        override fun onTransferStart(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+        override fun onBytesTransferred(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean, bytesTransferred: Int) { bytesIn.addAndGet(bytesTransferred.toLong()) }
+        override fun onTransferEnd(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+    }
+
+    /** "Waiting for the server…", then "Receiving 18 MB/s · 1.2 of 2.5 s ready" */
+    private fun arrival(now: Long): String {
+        val got = bytesIn.get()
+        if (lastBytesAt > 0 && now > lastBytesAt) {
+            val r = (got - lastBytes) * 1000.0 / (now - lastBytesAt)
+            rate = if (rate == 0.0) r else rate * 0.6 + r * 0.4
+        }
+        lastBytes = got; lastBytesAt = now
+        val exo = player ?: return ""
+        val who = if (fromEasynews) "Easynews" else "The server"
+        if (got == 0L) return "$who is preparing the file…"
+        val need = if (everReady) 5.0 else 2.5 // seconds the player wants before it plays (Media3's defaults)
+        val ready = (exo.totalBufferedDuration / 1000.0).coerceAtMost(need)
+        return "Receiving %.1f MB/s · %.1f of %.1f s ready".format(rate / 1_000_000, ready, need)
+    }
     private var player: ExoPlayer? = null
     private val handler = Handler(Looper.getMainLooper())
     private var closed = false
@@ -200,13 +233,13 @@ class PlayerActivity : AppCompatActivity() {
             // any other stream: a quiet spinner in the middle, a word under it only when it's slow
             val spin = !torrent && waiting && (waited >= 1 || !everReady)
             loading.visibility = if (spin) View.VISIBLE else View.GONE
+            val stage = if (spin && waited >= 2) arrival(now) else { lastBytesAt = 0; rate = 0.0; "" }
             loadingWords.text = when {
                 now < busyUntil -> "The source is busy · trying again…"
-                waited >= 45 -> "This source isn't starting · Back to pick another"
-                waited >= 12 -> "Still loading · Back tries another source"
-                waited >= 4 -> if (everReady) "Catching up…" else "Starting…"
-                else -> ""
-            }
+                waited >= 45 -> "$stage\nThis source isn't starting · Back to pick another"
+                waited >= 15 -> "$stage\nBack tries another source"
+                else -> stage
+            }.trim()
             loadingWords.visibility = if (loadingWords.text.isEmpty()) View.GONE else View.VISIBLE
             if (text != null) {
                 seekFlash.text = text
@@ -329,6 +362,7 @@ class PlayerActivity : AppCompatActivity() {
         val online = OkHttpDataSource.Factory(http)
             .setUserAgent(if (ownAgent) null else "dxbi-tv/${BuildConfigVersion.name(this)}")
             .setDefaultRequestProperties(headers)
+            .setTransferListener(received)
         val dataSource = extras?.dataSource(online) ?: online
         // A host that answers 429 (too many requests: Real-Debrid when it's busy) is asked again
         // after 2, 4, 8 and 16 s, and said so on screen; after that the error shows instead of a

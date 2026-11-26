@@ -44,6 +44,7 @@ object Play : PlaybackBus.Listener {
             .put("title", item.name)
             .put("subtitle", listOf(episodeLabel, listOf(source.resLabel, source.audio).filter { it.isNotEmpty() }.joinToString(" · ")).filter { it.isNotEmpty() }.joinToString("  ·  "))
             .put("sourceKey", source.key)
+            .put("provider", source.provider)
             .put("accent", "#FF8A3D")
             .put("clock", true)
             .put("plain", true)
