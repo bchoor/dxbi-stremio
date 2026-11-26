@@ -362,9 +362,11 @@ class PlayerActivity : AppCompatActivity() {
         if (torrent) handler.post(torrentStatus)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            // Back leaves the player straight away, like Netflix (the position is kept)
+            // Back closes an open panel, then hides the controls, then leaves the player (the position is kept)
             override fun handleOnBackPressed() {
-                if (!controls.closePanel()) finishWith()
+                if (controls.closePanel()) return
+                if (controls.visible) { controls.hide(); return }
+                finishWith()
             }
         })
     }
