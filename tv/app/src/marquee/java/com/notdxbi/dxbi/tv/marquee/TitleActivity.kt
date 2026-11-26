@@ -149,9 +149,18 @@ class TitleActivity : AppCompatActivity() {
         head.addView(label("Sources", 18f, bold = true))
         sourcesStatus = label("", 11f, Ui.MUTED)
         head.addView(sourcesStatus, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(10) })
-        right.addView(head)
+        // three zones: the heading and filters stay put, and only the list under them moves
+        val zone = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = round(Ui.SURFACE, 10, this@TitleActivity)
+            setPadding(dp(8), dp(10), dp(8), dp(4))
+            clipChildren = false
+            clipToPadding = false
+        }
+        zone.addView(head)
+        right.addView(zone)
         addonRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(2), dp(10), dp(2), 0) }
-        right.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(addonRow) })
+        zone.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipChildren = false; clipToPadding = false; addView(addonRow) })
         filterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(2), dp(8), dp(2), dp(8)) }
         for (f in listOf("All", "4K", "1080p", "DV", "Atmos", "Instant")) {
             filterRow.addView(chip(f).apply {
@@ -159,16 +168,22 @@ class TitleActivity : AppCompatActivity() {
                 setOnClickListener { filter = f; for (i in 0 until filterRow.childCount) filterRow.getChildAt(i).isSelected = filterRow.getChildAt(i) == this; render() }
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
         }
-        right.addView(filterRow)
+        zone.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipChildren = false; clipToPadding = false; addView(filterRow) })
         val list = RecyclerView(this).apply {
-            layoutManager = LinearLayoutManager(context)
+            layoutManager = KeylineLayout(context)
             adapter = this@TitleActivity.adapter
             sourcesList = this
             itemAnimator = null
-            clipToPadding = false
-            setPadding(0, dp(4), 0, dp(40))
+            // cards stay inside the list's own box, fading out under the filters
+            clipChildren = true
+            clipToPadding = true
+            setPadding(0, dp(8), 0, dp(12))
+            isVerticalFadingEdgeEnabled = true
+            setFadingEdgeLength(dp(20))
         }
-        right.addView(list, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        val viewport = FrameLayout(this).apply { clipChildren = true; clipToPadding = true }
+        viewport.addView(list, match())
+        right.addView(viewport, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = dp(8) })
         body.addView(right, LinearLayout.LayoutParams(dp(400), LinearLayout.LayoutParams.MATCH_PARENT))
         root.addView(body, match())
         setContentView(root)
@@ -178,6 +193,18 @@ class TitleActivity : AppCompatActivity() {
         }
         rightPane = right
         leftPane = left
+    }
+
+    /** The focused source sits one card down from the top (the one above it in view), moved there at once, not glided */
+    private class KeylineLayout(ctx: android.content.Context) : LinearLayoutManager(ctx) {
+        override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: android.graphics.Rect, immediate: Boolean, focusedChildVisible: Boolean): Boolean {
+            val pos = getPosition(child)
+            val above = if (pos > 0) child.height + (child.layoutParams as? ViewGroup.MarginLayoutParams)?.bottomMargin.let { it ?: 0 } else 0
+            val dy = child.top - (parent.paddingTop + above)
+            if (dy == 0) return false
+            parent.scrollBy(0, dy)
+            return true
+        }
     }
 
     private lateinit var leftPane: View
