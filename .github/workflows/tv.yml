@@ -50,11 +50,12 @@ jobs:
       # GitHub's Ubuntu runners come with the Android SDK (ANDROID_HOME); Gradle fetches what's missing
       - name: Build
         if: env.HAS_KEY == 'true'
-        # two apps from the same code: dx.bi TV, and dx.bi for phones (build.gradle.kts, productFlavors)
+        # three apps from the same code: dx.bi TV, dx.bi for phones, and Marquee (build.gradle.kts, productFlavors)
         run: |
-          ./gradlew assembleTvRelease assembleMobileRelease --no-daemon
+          ./gradlew assembleTvRelease assembleMobileRelease assembleMarqueeRelease --no-daemon
           cp app/build/outputs/apk/tv/release/app-tv-release.apk dxbi-tv.apk
           cp app/build/outputs/apk/mobile/release/app-mobile-release.apk dxbi-mobile.apk
+          cp app/build/outputs/apk/marquee/release/app-marquee-release.apk marquee.apk
         env:
           DXBI_TV_KEYSTORE: ${{ runner.temp }}/dxbi-tv.jks
           DXBI_TV_KEYSTORE_PASSWORD: ${{ secrets.DXBI_TV_KEYSTORE_PASSWORD }}
@@ -68,6 +69,7 @@ jobs:
           path: |
             tv/dxbi-tv.apk
             tv/dxbi-mobile.apk
+            tv/marquee.apk
           if-no-files-found: error
 
       - name: Attach to the release

@@ -1,0 +1,11 @@
+<resources>
+    <string name="marquee_name">Marquee</string>
+    <color name="mq_bg">#0B0C0F</color>
+    <style name="Theme.Marquee" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/mq_bg</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="colorAccent">#F5B544</item>
+    </style>
+</resources>

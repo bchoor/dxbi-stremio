@@ -47,6 +47,15 @@ android {
             buildConfigField("boolean", "PHONE_UI", "false")
             buildConfigField("String", "APK_NAME", "\"dxbi-tv.apk\"")
         }
+        // Marquee: our own TV app (native screens, no web page), sharing dx.bi TV's player
+        create("marquee") {
+            dimension = "device"
+            applicationId = "com.bchoor.marquee"
+            buildConfigField("boolean", "PHONE_UI", "false")
+            buildConfigField("String", "APK_NAME", "\"marquee.apk\"")
+            // no releases to update from yet: installed from the build
+            buildConfigField("boolean", "SELF_UPDATE", "false")
+        }
         create("mobile") {
             dimension = "device"
             applicationId = "com.notdxbi.dxbi.mobile"
@@ -114,6 +123,8 @@ android {
 
     // The built-in dx.bi plugin is the one at the repository root, copied in at build time
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/dxbiAssets"))
+    // Marquee runs dx.bi TV's player, so it takes the TV's stand-ins for the phone app's parts
+    sourceSets["marquee"].java.srcDir("src/tv/java")
 }
 
 androidComponents {
@@ -127,6 +138,7 @@ androidComponents {
     }
     // (the preview build is the phone app's)
     beforeVariants(selector().withFlavor("device" to "tv").withBuildType("preview")) { it.enable = false }
+    beforeVariants(selector().withFlavor("device" to "marquee").withBuildType("preview")) { it.enable = false }
 }
 
 val copyPlugin by tasks.registering(Copy::class) {
@@ -180,4 +192,14 @@ dependencies {
     // (the Compose compiler wants its runtime in every build: dx.bi TV uses none of it, and its release leaves it out)
     "tvImplementation"(platform("androidx.compose:compose-bom:2024.12.01"))
     "tvImplementation"("androidx.compose.runtime:runtime")
+    "marqueeImplementation"(platform("androidx.compose:compose-bom:2024.12.01"))
+    "marqueeImplementation"("androidx.compose.runtime:runtime")
+    // Marquee's screens: plain Android views, light enough for a 32-bit TV
+    "marqueeImplementation"("androidx.recyclerview:recyclerview:1.3.2")
+    "marqueeImplementation"("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    "marqueeImplementation"("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    "marqueeImplementation"("io.coil-kt.coil3:coil:3.0.4")
+    "marqueeImplementation"("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
+    // the sign-in QR code, drawn on the TV
+    "marqueeImplementation"("com.google.zxing:core:3.5.3")
 }

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Marquee: our own screens over Stremio's add-ons, with dx.bi TV's player -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- (no self-updates: installed from the build) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove" />
+
+    <!-- Asks which apps can open a video (VLC) and a trailer (YouTube) -->
+    <queries>
+        <package android:name="org.videolan.vlc" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="vnd.youtube" />
+        </intent>
+    </queries>
+
+    <application
+        android:name="com.notdxbi.dxbi.tv.marquee.MarqueeApp"
+        android:banner="@drawable/marquee_banner"
+        android:icon="@drawable/marquee_icon"
+        android:label="@string/marquee_name"
+        android:theme="@style/Theme.Marquee"
+        tools:replace="android:banner,android:icon,android:label,android:theme">
+
+        <!-- dx.bi's web screen isn't part of Marquee -->
+        <activity android:name="com.notdxbi.dxbi.tv.MainActivity" tools:node="remove" />
+
+        <activity
+            android:name="com.notdxbi.dxbi.tv.marquee.HomeActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name="com.notdxbi.dxbi.tv.marquee.LoginActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape" />
+
+        <activity
+            android:name="com.notdxbi.dxbi.tv.marquee.TitleActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape" />
+
+        <activity
+            android:name="com.notdxbi.dxbi.tv.marquee.SearchActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:windowSoftInputMode="stateVisible|adjustNothing" />
+    </application>
+</manifest>
