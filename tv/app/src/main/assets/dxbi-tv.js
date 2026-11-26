@@ -189,7 +189,7 @@
     .dxtv-row small { display: block; margin-top: 4px; color: #9a9a9a; font-size: 13px; line-height: 1.4; }
     .dxtv-row b { flex: none; color: #e50914; font-weight: 700; }
     .dxtv-settings-entry { margin: 0 0 24px; }
-    .dxtv-qr-login { position: fixed; right: 48px; bottom: 48px; z-index: 2147483000; padding: 14px 22px; border: 0; border-radius: 10px; background: #fff; color: #111; font: 600 17px Inter, system-ui, sans-serif; cursor: pointer; }
+    .dxtv-qr-login { position: fixed; right: 48px; top: 32px; z-index: 2147483000; padding: 14px 22px; border: 0; border-radius: 10px; background: #fff; color: #111; font: 600 17px Inter, system-ui, sans-serif; cursor: pointer; }
     .dxtv-qr-login:focus { outline: 3px solid #e50914; outline-offset: 3px; }
     .dxtv-code { display: block; margin: 0 0 14px; text-align: center; font: 700 30px/1.2 Inter, system-ui, sans-serif; letter-spacing: .25em; color: #fff; }
     .dxtv-qr { display: block; width: 220px; height: 220px; margin: 0 auto 18px; border-radius: 8px; background: #fff; }
