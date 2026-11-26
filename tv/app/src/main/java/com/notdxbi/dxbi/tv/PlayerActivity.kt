@@ -736,8 +736,11 @@ class PlayerActivity : AppCompatActivity() {
         val subs = playerView.subtitleView ?: return
         val overlay = playerView.overlayFrameLayout ?: return
         val frame = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_content_frame) ?: return
-        subs.setFractionalTextSize(subtitleSize)
-        subs.setBottomPaddingFraction(0.05f)
+        // white words with a soft shadow, no black box (the TV's caption settings default to a box);
+        // Stremio's own subtitle colours, when sent, replace this
+        if (!styled) subs.setStyle(CaptionStyleCompat(Color.WHITE, Color.TRANSPARENT, Color.TRANSPARENT,
+            CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW, 0xE6000000.toInt(), Typeface.create("sans-serif-medium", Typeface.NORMAL)))
+        if (!styled) { subs.setFractionalTextSize(subtitleSize); subs.setBottomPaddingFraction(0.05f) }
         subs.setApplyEmbeddedFontSizes(false)
         if (subs.parent !== overlay) {
             (subs.parent as? android.view.ViewGroup)?.removeView(subs)
@@ -784,8 +787,11 @@ class PlayerActivity : AppCompatActivity() {
      * Stremio's subtitle settings (size, colours, outline, position) instead of the player's white
      * text on black boxes. Colours come as #RRGGBB or #RRGGBBAA.
      */
+    private var styled = false
+
     private fun styleSubtitles(style: JSONObject) {
         val view = playerView.subtitleView ?: return
+        styled = true
         fun color(key: String, fallback: Int): Int {
             val hex = style.optString(key).removePrefix("#")
             val v = hex.toLongOrNull(16) ?: return fallback
