@@ -10,3 +10,6 @@
 
 # The FFmpeg audio decoder: Media3 finds it by name and builds it by reflection
 -keep class androidx.media3.decoder.ffmpeg.** { *; }
+
+# The Dolby Digital encoder's native side
+-keep class com.notdxbi.dxbi.tv.Ac3Native { *; }

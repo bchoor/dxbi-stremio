@@ -47,6 +47,17 @@ jobs:
         if: env.HAS_KEY == 'true'
         run: echo "${{ secrets.DXBI_TV_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/dxbi-tv.jks"
 
+      # Marquee's live Dolby Digital encoder: FFmpeg's ac3 encoder built with the runner's NDK (kept between runs)
+      - uses: actions/cache@v4
+        if: env.HAS_KEY == 'true'
+        with:
+          path: tv/native/ac3enc/.work/out-*
+          key: ac3enc-ffmpeg-6.1.2-${{ hashFiles('tv/native/ac3enc/build.sh') }}
+
+      - name: Dolby Digital encoder
+        if: env.HAS_KEY == 'true'
+        run: native/ac3enc/build.sh
+
       # GitHub's Ubuntu runners come with the Android SDK (ANDROID_HOME); Gradle fetches what's missing
       - name: Build
         if: env.HAS_KEY == 'true'

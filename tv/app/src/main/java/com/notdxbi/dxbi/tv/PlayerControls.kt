@@ -555,7 +555,8 @@ class PlayerControls(
             listOfNotNull(audio.language, audio.label).filter { it.isNotEmpty() && it != "und" }.takeIf { it.isNotEmpty() }?.let { lines += "Track " + it.joinToString(" · ") }
         } else lines += "—"
         if (audioDecoder.isNotEmpty()) lines += "Decoder $audioDecoder"
-        if (audioOut.isNotEmpty()) lines += "To the TV  $audioOut"
+        val live = TvAudioSink.live
+        if (live.isNotEmpty()) lines += "To the TV  $live" else if (audioOut.isNotEmpty()) lines += "To the TV  $audioOut"
         val audioTracks = exo.currentTracks.groups.count { it.type == C.TRACK_TYPE_AUDIO }
         val textTracks = exo.currentTracks.groups.count { it.type == C.TRACK_TYPE_TEXT }
         lines += "$audioTracks audio tracks · $textTracks subtitle tracks"
