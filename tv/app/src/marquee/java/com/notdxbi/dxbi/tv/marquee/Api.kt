@@ -24,6 +24,35 @@ class Addon(val transportUrl: String, val manifest: JSONObject) {
     val name: String = manifest.optString("name", manifest.optString("id"))
     val id: String = manifest.optString("id")
 
+    /**
+     * Where sources are asked for. Torrentio's own settings can cap how many it answers with
+     * (limit=N) and hide torrents the debrid service hasn't cached (debridoptions=nodownloadlinks):
+     * both are dropped here so every result shows (uncached ones are marked and ranked last)
+     */
+    fun streamUrl(type: String, id: String): String {
+        val u = url("stream", type, id)
+        if (!base.contains("torrentio", ignoreCase = true)) return u
+        val head = base.substringBeforeLast('/')
+        val config = base.substringAfterLast('/')
+        if (!config.contains('=')) return u
+        val sep = if (config.contains("%7C", true)) Regex("%7C", RegexOption.IGNORE_CASE) else Regex("""\|""")
+        val joint = if (config.contains("%7C", true)) "%7C" else "|"
+        val comma = if (config.contains("%2C", true)) "%2C" else ","
+        val parts = config.split(sep).mapNotNull { part ->
+            val key = part.substringBefore('=').substringBefore("%3D").lowercase()
+            when (key) {
+                "limit" -> null
+                "debridoptions" -> {
+                    val eq = if (part.contains('=')) "=" else "%3D"
+                    val opts = part.substringAfter(eq).split(comma).filter { !it.equals("nodownloadlinks", true) }
+                    if (opts.isEmpty()) null else "debridoptions$eq" + opts.joinToString(comma)
+                }
+                else -> part
+            }
+        }
+        return u.replaceFirst("$head/$config/", "$head/${parts.joinToString(joint)}/")
+    }
+
     fun url(resource: String, type: String, id: String, extra: String = ""): String {
         val enc = URLEncoder.encode(id, "UTF-8").replace("+", "%20").replace("%3A", ":")
         val tail = if (extra.isEmpty()) "" else "/$extra"

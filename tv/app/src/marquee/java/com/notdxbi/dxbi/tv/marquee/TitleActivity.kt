@@ -266,7 +266,7 @@ class TitleActivity : AppCompatActivity() {
                     val started = System.currentTimeMillis()
                     var http = "ok"
                     val got = withTimeoutOrNull(30_000) {
-                        try { Api.get(a.url("stream", item.type, id)).optJSONArray("streams").objects().map { Source(a, it) } }
+                        try { Api.get(a.streamUrl(item.type, id)).optJSONArray("streams").objects().map { Source(a, it) } }
                         catch (e: Exception) { http = e.message ?: "error"; null }
                     }
                     if (got == null && http == "ok") http = "timed out"
