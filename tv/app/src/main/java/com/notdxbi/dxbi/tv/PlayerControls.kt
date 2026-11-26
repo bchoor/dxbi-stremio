@@ -70,6 +70,15 @@ class PlayerControls(
     private var opener: View? = null
     private var lastFocus: View = play
     private var stats: TextView? = null
+    // what the stats panel reports that the player only tells as it happens
+    private var videoDecoder = ""
+    private var audioDecoder = ""
+    private var audioOut = ""
+    private var bandwidth = 0L
+    private var stalls = 0
+    private var wasReady = false
+    private val opened = android.os.SystemClock.elapsedRealtime()
+    private var firstFrameMs = -1L
 
     private val hide = Runnable { if (!panelOpen) hide() }
     private val tick = object : Runnable {
@@ -86,6 +95,33 @@ class PlayerControls(
     override val panelOpen get() = panel.visibility == View.VISIBLE
 
     init {
+        exo.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onVideoDecoderInitialized(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { videoDecoder = decoderName }
+            override fun onAudioDecoderInitialized(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { audioDecoder = decoderName }
+            override fun onAudioTrackInitialized(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, audioTrackConfig: androidx.media3.exoplayer.audio.AudioSink.AudioTrackConfig) {
+                val enc = when (audioTrackConfig.encoding) {
+                    C.ENCODING_AC3 -> "Dolby Digital (passthrough)"
+                    C.ENCODING_E_AC3 -> "Dolby Digital+ (passthrough)"
+                    C.ENCODING_E_AC3_JOC -> "Dolby Digital+ Atmos (passthrough)"
+                    C.ENCODING_DTS -> "DTS (passthrough)"
+                    C.ENCODING_DTS_HD -> "DTS-HD (passthrough)"
+                    C.ENCODING_DOLBY_TRUEHD -> "TrueHD (passthrough)"
+                    C.ENCODING_PCM_16BIT -> "PCM 16-bit (decoded)"
+                    C.ENCODING_PCM_FLOAT -> "PCM float (decoded)"
+                    else -> "encoding ${audioTrackConfig.encoding}"
+                }
+                val ch = Integer.bitCount(audioTrackConfig.channelConfig)
+                audioOut = "$enc · ${channelName(ch)} · ${audioTrackConfig.sampleRate / 1000} kHz" + (if (audioTrackConfig.tunneling) " · tunneled" else "")
+            }
+            override fun onBandwidthEstimate(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, totalLoadTimeMs: Int, totalBytesLoaded: Long, bitrateEstimate: Long) { bandwidth = bitrateEstimate }
+            override fun onRenderedFirstFrame(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
+                if (firstFrameMs < 0) firstFrameMs = android.os.SystemClock.elapsedRealtime() - opened
+            }
+            override fun onPlaybackStateChanged(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime, state: Int) {
+                if (state == androidx.media3.common.Player.STATE_READY) wasReady = true
+                else if (state == androidx.media3.common.Player.STATE_BUFFERING && wasReady) stalls++
+            }
+        })
         line.accent = accent
         click(R.id.ctl_back) { leave(false) }
         click(R.id.ctl_play) { exo.playWhenReady = !exo.playWhenReady; paint() }
@@ -457,8 +493,8 @@ class PlayerControls(
         openPanel(from, "Stream stats")
         val text = TextView(activity).apply {
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setLineSpacing(0f, 1.35f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setLineSpacing(0f, 1.25f)
             setPadding(dp(12), 0, dp(12), dp(10))
             isFocusable = true
         }
@@ -471,13 +507,83 @@ class PlayerControls(
     private fun statsText(): String {
         val video = exo.videoFormat
         val audio = exo.audioFormat
-        fun codec(mime: String?) = mime?.substringAfter('/')?.removePrefix("x-")?.uppercase() ?: "—"
+        fun codec(mime: String?) = when (mime) {
+            null -> "—"
+            MimeTypes.VIDEO_H265 -> "HEVC"
+            MimeTypes.VIDEO_H264 -> "H.264"
+            MimeTypes.VIDEO_AV1 -> "AV1"
+            MimeTypes.VIDEO_VP9 -> "VP9"
+            MimeTypes.VIDEO_DOLBY_VISION -> "Dolby Vision"
+            else -> mime.substringAfter('/').removePrefix("x-").uppercase()
+        }
+        fun mbps(bits: Int) = "%.1f Mbps".format(bits / 1_000_000f)
         val lines = mutableListOf<String>()
-        lines += "Picture  " + (if (video != null) "${video.width} × ${video.height}" else "—")
-        lines += "Video  " + codec(video?.sampleMimeType) + (video?.frameRate?.takeIf { it > 0 }?.let { " · %.0f fps".format(it) } ?: "")
-        lines += "Audio  " + codec(audio?.sampleMimeType) + (audio?.channelCount?.takeIf { it > 0 }?.let { " · " + channelName(it) } ?: "")
-        (video?.bitrate?.takeIf { it > 0 })?.let { lines += "Bitrate  %.1f Mbps".format(it / 1_000_000f) }
-        lines += "Buffered  %.0f s".format(exo.totalBufferedDuration / 1000f)
+
+        lines += "— VIDEO —"
+        if (video != null) {
+            lines += "${video.width} × ${video.height}" + (video.frameRate.takeIf { it > 0 }?.let { " · %.3f fps".format(it).replace(Regex("""\.?0+ fps"""), " fps") } ?: "")
+            lines += codec(video.sampleMimeType) + (video.codecs?.let { "  ($it)" } ?: "")
+            val c = video.colorInfo
+            val picture = when {
+                video.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION || video.codecs?.startsWith("dv") == true -> "Dolby Vision" + (video.codecs?.let { Regex("""dv\w{2}\.(\d+)""").find(it)?.groupValues?.get(1)?.let { p -> " profile ${p.toInt()}" } } ?: "")
+                c?.colorTransfer == C.COLOR_TRANSFER_ST2084 -> "HDR10 (PQ)"
+                c?.colorTransfer == C.COLOR_TRANSFER_HLG -> "HLG"
+                else -> "SDR"
+            }
+            val space = when (c?.colorSpace) { C.COLOR_SPACE_BT2020 -> "BT.2020"; C.COLOR_SPACE_BT709 -> "BT.709"; C.COLOR_SPACE_BT601 -> "BT.601"; else -> null }
+            val depth = c?.lumaBitdepth?.takeIf { it > 0 }?.let { "$it-bit" }
+            lines += listOfNotNull(picture, space, depth).joinToString(" · ")
+            listOfNotNull(
+                video.averageBitrate.takeIf { it > 0 }?.let { "avg ${mbps(it)}" },
+                video.peakBitrate.takeIf { it > 0 }?.let { "peak ${mbps(it)}" },
+                video.bitrate.takeIf { it > 0 && video.averageBitrate <= 0 }?.let { mbps(it) },
+            ).takeIf { it.isNotEmpty() }?.let { lines += "Bitrate " + it.joinToString(" · ") }
+        } else lines += "—"
+        if (videoDecoder.isNotEmpty()) lines += "Decoder " + videoDecoder + (if (videoDecoder.startsWith("c2.android") || videoDecoder.startsWith("OMX.google")) " (software)" else " (hardware)")
+        exo.videoDecoderCounters?.let { d ->
+            d.ensureUpdated()
+            lines += "Frames ${d.renderedOutputBufferCount} shown · ${d.droppedBufferCount} dropped · ${d.skippedOutputBufferCount} skipped"
+        }
+
+        lines += ""
+        lines += "— AUDIO —"
+        if (audio != null) {
+            lines += codec(audio.sampleMimeType).let { if (audio.sampleMimeType == MimeTypes.AUDIO_E_AC3_JOC) "E-AC3 Atmos" else it } +
+                (audio.channelCount.takeIf { it > 0 }?.let { " · " + channelName(it) } ?: "") +
+                (audio.sampleRate.takeIf { it > 0 }?.let { " · ${it / 1000} kHz" } ?: "") +
+                (audio.bitrate.takeIf { it > 0 }?.let { " · ${it / 1000} kbps" } ?: "")
+            listOfNotNull(audio.language, audio.label).filter { it.isNotEmpty() && it != "und" }.takeIf { it.isNotEmpty() }?.let { lines += "Track " + it.joinToString(" · ") }
+        } else lines += "—"
+        if (audioDecoder.isNotEmpty()) lines += "Decoder $audioDecoder"
+        if (audioOut.isNotEmpty()) lines += "To the TV  $audioOut"
+        val audioTracks = exo.currentTracks.groups.count { it.type == C.TRACK_TYPE_AUDIO }
+        val textTracks = exo.currentTracks.groups.count { it.type == C.TRACK_TYPE_TEXT }
+        lines += "$audioTracks audio tracks · $textTracks subtitle tracks"
+        exo.currentTracks.groups.firstOrNull { it.type == C.TRACK_TYPE_TEXT && it.isSelected }?.let { g ->
+            val f = (0 until g.length).firstOrNull { g.isTrackSelected(it) }?.let { g.getTrackFormat(it) }
+            if (f != null) lines += "Subtitles " + listOfNotNull(f.language, f.label, f.sampleMimeType?.substringAfter('/')).filter { it.isNotEmpty() }.joinToString(" · ")
+        }
+
+        lines += ""
+        lines += "— NETWORK —"
+        lines += "Buffered %.0f s ahead".format(exo.totalBufferedDuration / 1000f) + (if (bandwidth > 0) " · speed %.0f Mbps".format(bandwidth / 1_000_000f) else "")
+        lines += "Stalls $stalls" + (if (firstFrameMs >= 0) " · started in %.1f s".format(firstFrameMs / 1000f) else "")
+        val stream = org.json.JSONObject(activity.intent.getStringExtra(PlayerActivity.EXTRA_STREAM) ?: "{}")
+        android.net.Uri.parse(stream.optString("url")).host?.let { lines += "From $it" }
+        video?.containerMimeType?.let { lines += "Container " + it.substringAfter('/').removePrefix("x-") }
+
+        lines += ""
+        lines += "— DISPLAY —"
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            activity.display?.let { d ->
+                val m = d.mode
+                lines += "${m.physicalWidth} × ${m.physicalHeight} · %.0f Hz".format(m.refreshRate)
+                val hdr = d.hdrCapabilities?.supportedHdrTypes?.map {
+                    when (it) { 1 -> "Dolby Vision"; 2 -> "HDR10"; 3 -> "HLG"; 4 -> "HDR10+"; else -> "type $it" }
+                }.orEmpty()
+                if (hdr.isNotEmpty()) lines += "TV can show " + hdr.joinToString(", ")
+            }
+        }
         return lines.joinToString("\n")
     }
 
