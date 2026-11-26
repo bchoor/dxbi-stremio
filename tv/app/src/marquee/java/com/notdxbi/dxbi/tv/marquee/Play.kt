@@ -93,7 +93,30 @@ object Play : PlaybackBus.Listener {
         }
     }
 
-    fun trailer(activity: Activity, ytId: String) {
+    /** In Marquee's own player; in the YouTube app only when YouTube's addresses can't be read */
+    fun trailer(activity: Activity, ytId: String, title: String = "") = scope.launch {
+        val note = Toast.makeText(activity, "Loading the trailer…", Toast.LENGTH_SHORT).apply { show() }
+        val s = Trailer.streams(ytId)
+        note.cancel()
+        if (s != null && !activity.isFinishing) {
+            val stream = JSONObject()
+                .put("url", s.video)
+                .put("title", title.ifEmpty { "Trailer" })
+                .put("subtitle", "Trailer  ·  ${s.label}")
+                .put("sourceKey", "trailer/$ytId")
+                .put("accent", "#FF8A3D")
+                .put("clock", true)
+                .put("plain", true)
+                .put("trailer", true)
+            s.audio?.let { stream.put("audioUrl", it) }
+            playing = null // a trailer's position isn't saved to the library
+            activity.startActivity(Intent(activity, PlayerActivity::class.java).putExtra(PlayerActivity.EXTRA_STREAM, stream.toString()))
+            return@launch
+        }
+        youtubeApp(activity, ytId)
+    }
+
+    private fun youtubeApp(activity: Activity, ytId: String) {
         try { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$ytId"))) }
         catch (_: ActivityNotFoundException) {
             try { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$ytId"))) }

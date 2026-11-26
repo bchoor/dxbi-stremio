@@ -13,3 +13,15 @@
 
 # The Dolby Digital encoder's native side
 -keep class com.notdxbi.dxbi.tv.Ac3Native { *; }
+
+# Marquee's trailers: NewPipe's extractor (Rhino runs YouTube's player script)
+-keep class org.schabi.newpipe.extractor.** { *; }
+-keep class org.mozilla.javascript.** { *; }
+-keep class org.mozilla.classfile.** { *; }
+-dontwarn org.mozilla.javascript.**
+-dontwarn javax.script.**
+-dontwarn java.beans.**
+-dontwarn jdk.dynalink.**
+-dontwarn com.google.re2j.**
+-dontwarn org.jsoup.**
+-dontwarn org.schabi.newpipe.extractor.**

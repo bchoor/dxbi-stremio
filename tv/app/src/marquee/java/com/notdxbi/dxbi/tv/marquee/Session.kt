@@ -11,6 +11,14 @@ import android.widget.LinearLayout
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import coil3.load
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /** What every screen shares while the app runs */
@@ -22,6 +30,30 @@ object Session {
         if (addons.isEmpty()) addons = try { Api.addons() } catch (_: Exception) { emptyList() }
         if (Play.library.isEmpty()) try { Play.library = Api.library().associateBy { it.optString("_id") }.toMutableMap() } catch (_: Exception) { }
         return addons
+    }
+
+    // ---- The year and IMDb rating under every poster and in the hero ----
+    /** id to (year, rating), read once from the title's details when a catalog or the library left them out */
+    private val captions = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
+    private val asking = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val captionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val captionLimit = Semaphore(4)
+
+    fun yearOf(item: Item) = item.year.ifEmpty { captions[item.id]?.first.orEmpty() }
+    fun ratingOf(item: Item) = item.rating.ifEmpty { captions[item.id]?.second.orEmpty() }
+
+    /** Calls [done] once the year and rating are known (at once when they already are) */
+    fun caption(item: Item, done: () -> Unit) {
+        if ((item.year.isNotEmpty() && item.rating.isNotEmpty()) || captions.containsKey(item.id) || item.id.isEmpty()) return
+        if (!asking.add(item.id)) return
+        captionScope.launch {
+            val m = captionLimit.withPermit { withTimeoutOrNull(8_000) { withContext(Dispatchers.IO) { meta(item.type, item.id) } } }
+            asking.remove(item.id)
+            if (m == null) return@launch
+            val full = Item.from(m)
+            captions[item.id] = full.year to full.rating
+            done()
+        }
     }
 
     /** A title's details, from the first add-on that has them (Cinemeta) */
@@ -140,8 +172,13 @@ class CardsAdapter(private val items: List<Item>, private val wide: Boolean, pri
             holder.image.load(backdropFor(item))
         } else {
             holder.image.load(item.poster.ifEmpty { null })
-            holder.year?.text = item.year
-            holder.rating?.text = if (item.rating.isEmpty()) "" else "★ ${item.rating}"
+            fun fill() {
+                holder.year?.text = Session.yearOf(item)
+                val r = Session.ratingOf(item)
+                holder.rating?.text = if (r.isEmpty()) "" else "★ $r"
+            }
+            fill()
+            Session.caption(item) { if (holder.bindingAdapterPosition == position) fill() }
         }
         holder.card.setOnClickListener { onOpen(item) }
         holder.card.setOnFocusChangeListener { v, has ->

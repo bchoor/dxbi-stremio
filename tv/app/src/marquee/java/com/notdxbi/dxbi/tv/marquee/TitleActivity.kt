@@ -119,7 +119,7 @@ class TitleActivity : AppCompatActivity() {
         buttonsRow = buttons
         val gap = { LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) } }
         playButton = pillButton(R.drawable.ic_mq_play, "Play", primary = true, sub = "Finding sources…").apply { setOnClickListener { sources.firstOrNull()?.let { play(it) } } }
-        trailerButton = pillButton(R.drawable.ic_mq_trailer, "Trailer").apply { visibility = View.GONE; setOnClickListener { trailerYt?.let { Play.trailer(this@TitleActivity, it) } } }
+        trailerButton = pillButton(R.drawable.ic_mq_trailer, "Trailer").apply { visibility = View.GONE; setOnClickListener { trailerYt?.let { Play.trailer(this@TitleActivity, it, item.name) } } }
         watchButton = pillButton(R.drawable.ic_mq_add, "My List").apply { setOnClickListener { toggleWatchlist() } }
         buttons.addView(playButton, gap()); buttons.addView(trailerButton, gap()); buttons.addView(watchButton, gap())
         left.addView(buttons, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) })

@@ -347,7 +347,14 @@ class PlayerActivity : AppCompatActivity() {
             .setUri(Uri.parse(url))
             .setSubtitleConfigurations(subtitles)
             .build()
-        exo.setMediaItem(item, stream.optLong("startMs", 0L).coerceAtLeast(0L))
+        val startMs = stream.optLong("startMs", 0L).coerceAtLeast(0L)
+        val audioUrl = stream.optString("audioUrl")
+        if (audioUrl.isNotEmpty()) {
+            // picture and sound from separate addresses (YouTube trailers), played together
+            val factory = DefaultMediaSourceFactory(dataSource)
+            exo.setMediaSource(androidx.media3.exoplayer.source.MergingMediaSource(
+                factory.createMediaSource(item), factory.createMediaSource(MediaItem.fromUri(Uri.parse(audioUrl)))), startMs)
+        } else exo.setMediaItem(item, startMs)
         exo.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) everReady = true

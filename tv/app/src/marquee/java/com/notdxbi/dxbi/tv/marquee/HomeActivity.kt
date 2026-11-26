@@ -40,6 +40,8 @@ class HomeActivity : AppCompatActivity() {
     private val hideExit = Runnable { exitNote.animate().alpha(0f).setDuration(200).withEndAction { exitNote.visibility = View.GONE }.start() }
     private lateinit var heroTitle: TextView
     private lateinit var heroMeta: TextView
+    /** When Left last landed on a row's first poster (or the first hero button) */
+    private var reachedStartAt = 0L
     private lateinit var heroText: TextView
     private lateinit var listButton: LinearLayout
     private lateinit var rowsView: RecyclerView
@@ -412,7 +414,8 @@ class HomeActivity : AppCompatActivity() {
             when (code) {
                 KeyEvent.KEYCODE_DPAD_UP -> {}
                 KeyEvent.KEYCODE_DPAD_DOWN -> focusRow(0)
-                KeyEvent.KEYCODE_DPAD_LEFT -> if (i > 0) buttons[i - 1].requestFocus() else railItemForPage()?.requestFocus()
+                KeyEvent.KEYCODE_DPAD_LEFT -> if (i > 0) { if (i == 1) reachedStartAt = event.eventTime; buttons[i - 1].requestFocus() }
+                    else if (event.repeatCount == 0 && event.eventTime - reachedStartAt > 400) railItemForPage()?.requestFocus()
                 KeyEvent.KEYCODE_DPAD_RIGHT -> if (i in 0 until buttons.size - 1) buttons[i + 1].requestFocus()
             }
             return true
@@ -428,7 +431,11 @@ class HomeActivity : AppCompatActivity() {
             when (code) {
                 KeyEvent.KEYCODE_DPAD_UP -> if (r == 0) heroPlay.requestFocus() else focusCard(r - 1, c)
                 KeyEvent.KEYCODE_DPAD_DOWN -> if (r < rows.rows.size - 1) focusCard(r + 1, c)
-                KeyEvent.KEYCODE_DPAD_LEFT -> if (c == 0) railItemForPage()?.requestFocus() else {
+                KeyEvent.KEYCODE_DPAD_LEFT -> if (c == 0) {
+                    // the menu opens on a fresh press only: holding or racing Left stops at the first poster
+                    if (event.repeatCount == 0 && event.eventTime - reachedStartAt > 400) railItemForPage()?.requestFocus()
+                } else {
+                    if (c == 1) reachedStartAt = event.eventTime
                     val prev = list.findViewHolderForAdapterPosition(c - 1)?.itemView
                     if (prev == null || !prev.requestFocus()) { list.scrollToPosition(c - 1); list.post { list.findViewHolderForAdapterPosition(c - 1)?.itemView?.requestFocus() } }
                 }
@@ -446,8 +453,13 @@ class HomeActivity : AppCompatActivity() {
     private fun show(item: Item) {
         hero = item
         heroTitle.text = item.name
-        heroMeta.text = listOf(item.year, if (item.type == "series") "Series" else if (item.type == "movie") "Movie" else "", item.subtitle)
-            .filter { it.isNotEmpty() }.joinToString("  ·  ")
+        fun meta() {
+            val r = Session.ratingOf(item)
+            heroMeta.text = listOf(Session.yearOf(item), if (item.type == "series") "Series" else if (item.type == "movie") "Movie" else "",
+                if (r.isEmpty()) "" else "★ $r IMDb", item.subtitle).filter { it.isNotEmpty() }.joinToString("  ·  ")
+        }
+        meta()
+        Session.caption(item) { if (hero?.id == item.id) meta() }
         heroText.text = item.description
         updateListButton()
         pictureJob?.cancel()

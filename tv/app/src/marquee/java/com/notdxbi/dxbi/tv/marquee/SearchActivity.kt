@@ -26,7 +26,9 @@ import java.net.URLEncoder
 
 /** Search every add-on that can search, as you type */
 class SearchActivity : AppCompatActivity() {
-    private val rows = RowsAdapter({}, { Session.open(this, it) })
+    private val rows = RowsAdapter({}, { remember(box.text.toString()); Session.open(this, it) })
+    private lateinit var recent: LinearLayout
+    private lateinit var recentBox: LinearLayout
     private var job: Job? = null
     private lateinit var box: EditText
     private lateinit var status: TextView
@@ -59,6 +61,13 @@ class SearchActivity : AppCompatActivity() {
         root.addView(top)
         status = label("", 14f, Ui.MUTED).apply { setPadding(dp(4), dp(14), 0, dp(6)) }
         root.addView(status)
+        // recent searches, kept on this TV only: shown while the box is empty
+        recentBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(10), 0, 0) }
+        recentBox.addView(label("Recent searches", 14f, Ui.MUTED, bold = true))
+        recent = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false; setPadding(dp(4), dp(10), dp(40), dp(10)) }
+        recentBox.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipChildren = false; addView(recent) })
+        recentBox.addView(label("Long-press a search to remove it", 11f, Ui.MUTED).apply { setPadding(dp(4), dp(2), 0, 0) })
+        root.addView(recentBox)
         list = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(context)
             adapter = rows
@@ -82,17 +91,52 @@ class SearchActivity : AppCompatActivity() {
         box.setOnEditorActionListener { _, actionId, _ ->
             if (actionId != EditorInfo.IME_ACTION_SEARCH) return@setOnEditorActionListener false
             job?.cancel()
+            remember(box.text.toString())
             job = lifecycleScope.launch { search(box.text.toString()); goToResults() }
             (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(box.windowToken, 0)
             true
         }
+        showRecent()
         box.requestFocus()
+    }
+
+    // ---- Search history ----
+    private val prefs get() = getSharedPreferences("marquee", MODE_PRIVATE)
+
+    private fun history(): List<String> =
+        prefs.getString("searches", "").orEmpty().split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+
+    private fun saveHistory(list: List<String>) = prefs.edit().putString("searches", list.take(12).joinToString("\n")).apply()
+
+    private fun remember(text: String) {
+        val q = text.trim()
+        if (q.length < 2) return
+        saveHistory(listOf(q) + history().filterNot { it.equals(q, ignoreCase = true) })
+        showRecent()
+    }
+
+    private fun showRecent() {
+        val past = history()
+        recent.removeAllViews()
+        recentBox.visibility = if (past.isEmpty() || box.text.trim().length >= 2) android.view.View.GONE else android.view.View.VISIBLE
+        for (q in past) {
+            recent.addView(pillButton(R.drawable.ic_mq_search, q).apply {
+                isFocusable = true
+                setOnClickListener { box.setText(q); box.setSelection(q.length); remember(q); job?.cancel(); job = lifecycleScope.launch { search(q); goToResults() } }
+                setOnLongClickListener { saveHistory(history().filterNot { it == q }); showRecent(); recent.getChildAt(0)?.requestFocus() ?: box.requestFocus(); true }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) })
+        }
+        if (past.isNotEmpty()) recent.addView(pillButton(null, "Clear history").apply {
+            isFocusable = true
+            setOnClickListener { saveHistory(emptyList()); showRecent(); box.requestFocus() }
+        })
     }
 
     private suspend fun search(text: String) {
         val q = text.trim()
         rows.rows.clear()
         rows.notifyDataSetChanged()
+        showRecent()
         if (q.length < 2) { status.text = ""; return }
         val catalogs = Session.ensureAddons().flatMap { it.searchCatalogs() }
         if (catalogs.isEmpty()) { status.text = "None of your add-ons can search"; return }

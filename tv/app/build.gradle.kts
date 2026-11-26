@@ -202,4 +202,6 @@ dependencies {
     "marqueeImplementation"("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
     // the sign-in QR code, drawn on the TV
     "marqueeImplementation"("com.google.zxing:core:3.5.3")
+    // trailers in Marquee's own player: the YouTube trailer's video and sound addresses
+    "marqueeImplementation"("com.github.teamnewpipe:NewPipeExtractor:v0.26.5")
 }
