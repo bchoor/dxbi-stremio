@@ -140,7 +140,14 @@ class PlayerControls(
     private fun click(id: Int, action: (View) -> Unit) {
         activity.findViewById<View>(id).apply {
             setOnClickListener { action(it) }
-            setOnFocusChangeListener { view, has -> if (has) lastFocus = view }
+            setOnFocusChangeListener { view, has ->
+                if (has) lastFocus = view
+                // (each icon's name shows while it has focus)
+                activity.findViewById<TextView>(R.id.ctl_hint)?.apply {
+                    text = if (has) view.contentDescription else ""
+                    visibility = if (has && !view.contentDescription.isNullOrEmpty()) View.VISIBLE else View.GONE
+                }
+            }
         }
     }
 
