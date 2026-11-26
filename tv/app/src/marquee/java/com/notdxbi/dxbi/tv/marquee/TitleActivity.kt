@@ -83,7 +83,7 @@ class TitleActivity : AppCompatActivity() {
         root.addView(backdrop, match())
         root.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF20B0C0F.toInt(), 0x990B0C0F.toInt())) }, match())
 
-        val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(40), dp(24), dp(24), dp(20)) }
+        val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false; setPadding(dp(40), dp(24), dp(24), dp(20)) }
         val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
         left.addView(iconButton(R.drawable.ic_mq_back, "Back").apply { setOnClickListener { finish() } }, LinearLayout.LayoutParams(dp(40), dp(40)))
         title = label("", 32f, bold = true, lines = 2)
@@ -110,7 +110,7 @@ class TitleActivity : AppCompatActivity() {
             itemAnimator = null
             clipToPadding = false
             clipChildren = false
-            setPadding(dp(4), dp(8), dp(40), dp(8))
+            setPadding(dp(12), dp(8), dp(40), dp(8))
         }
         episodesBox.addView(episodesList, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(128)))
         left.addView(episodesBox, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })

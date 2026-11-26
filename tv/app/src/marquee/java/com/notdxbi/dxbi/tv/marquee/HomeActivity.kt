@@ -55,12 +55,12 @@ class HomeActivity : AppCompatActivity() {
             FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(160), Gravity.BOTTOM))
         root.addView(picture, FrameLayout.LayoutParams(dp(660), dp(372), Gravity.TOP or Gravity.END))
 
-        val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
         body.addView(rail(), LinearLayout.LayoutParams(dp(76), LinearLayout.LayoutParams.MATCH_PARENT))
 
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
         content.addView(heroPanel(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(262)))
-        status = label("Loading your catalogs…", 14f, Ui.MUTED).apply { setPadding(dp(4), 0, 0, dp(8)) }
+        status = label("Loading your catalogs…", 14f, Ui.MUTED).apply { setPadding(dp(16), 0, 0, dp(8)) }
         content.addView(status)
         rowsView = RecyclerView(this).apply {
             layoutManager = TopRowsLayout(context)
@@ -96,7 +96,7 @@ class HomeActivity : AppCompatActivity() {
     private fun heroPanel(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.BOTTOM
-        setPadding(dp(4), dp(24), 0, dp(14))
+        setPadding(dp(16), dp(24), 0, dp(14))
         heroTitle = label("", 30f, bold = true, lines = 2)
         addView(heroTitle, LinearLayout.LayoutParams(dp(480), LinearLayout.LayoutParams.WRAP_CONTENT))
         heroMeta = label("", 13f, Ui.MUTED)

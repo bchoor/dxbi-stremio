@@ -156,13 +156,14 @@ class RowsAdapter(private val onFocus: (Item) -> Unit, private val onOpen: (Item
             clipChildren = false
             clipToPadding = false
         }
-        val title = ctx.label("", 16f, bold = true).apply { setPadding(ctx.dp(4), 0, 0, ctx.dp(8)) }
+        val title = ctx.label("", 16f, bold = true).apply { setPadding(ctx.dp(16), 0, 0, ctx.dp(8)) }
         val list = RecyclerView(ctx).apply {
             layoutManager = LinearLayoutManager(ctx, LinearLayoutManager.HORIZONTAL, false).apply { initialPrefetchItemCount = 6 }
             setRecycledViewPool(pool)
             clipChildren = false
             clipToPadding = false
-            setPadding(ctx.dp(4), ctx.dp(8), ctx.dp(48), ctx.dp(8))
+            // room for the focused card to grow and show its whole ring
+            setPadding(ctx.dp(16), ctx.dp(10), ctx.dp(48), ctx.dp(10))
             itemAnimator = null
             isFocusable = false
             descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
