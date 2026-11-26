@@ -25,6 +25,8 @@ interface Controls {
     val visible: Boolean
     val panelOpen: Boolean
     fun show()
+    /** Shows the timeline with the remote on it, to move along it */
+    fun scrub() = show()
     fun hide()
     /** Pressing anything keeps them up a while longer */
     fun poke()
@@ -109,13 +111,37 @@ class PlayerControls(
             poke()
             true
         }
+        // Left/Right on the timeline: a press moves 10 s; held, it speeds up (5 s, 15 s, 30 s, then a minute
+        // a step), and the video jumps there when the key is let go
         line.setOnKeyListener { _, code, event ->
-            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-            when (code) {
-                KeyEvent.KEYCODE_DPAD_LEFT -> { seek(-1); paint(); true }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> { seek(+1); paint(); true }
-                else -> false
+            val direction = when (code) {
+                KeyEvent.KEYCODE_DPAD_LEFT -> -1
+                KeyEvent.KEYCODE_DPAD_RIGHT -> +1
+                else -> return@setOnKeyListener false
             }
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    val held = event.eventTime - event.downTime
+                    val step = when {
+                        event.repeatCount == 0 -> 10_000L
+                        held < 1_500 -> 5_000L
+                        held < 3_000 -> 15_000L
+                        held < 5_000 -> 30_000L
+                        else -> 60_000L
+                    }
+                    val duration = exo.duration.takeIf { it != C.TIME_UNSET && it > 0 }
+                    var target = ((scrubTo ?: exo.currentPosition) + direction * step).coerceAtLeast(0L)
+                    if (duration != null) target = target.coerceAtMost((duration - 1_000L).coerceAtLeast(0L))
+                    scrubTo = target
+                }
+                KeyEvent.ACTION_UP -> {
+                    scrubTo?.let { exo.seekTo(it) }
+                    scrubTo = null
+                }
+            }
+            paint()
+            poke()
+            true
         }
     }
 
@@ -144,12 +170,21 @@ class PlayerControls(
             setOnFocusChangeListener { view, has ->
                 if (has) lastFocus = view
                 // (each icon's name shows while it has focus)
-                activity.findViewById<TextView>(R.id.ctl_hint)?.apply {
+                activity.findViewById<TextView>(R.id.ctl_hint)?.takeIf { it.tag != "plain" }?.apply {
                     text = if (has) view.contentDescription else ""
                     visibility = if (has && !view.contentDescription.isNullOrEmpty()) View.VISIBLE else View.GONE
                 }
             }
         }
+    }
+
+    /** Where the timeline is being moved to (the video jumps there when the key is let go) */
+    private var scrubTo: Long? = null
+
+    override fun scrub() {
+        show()
+        line.isFocusable = true
+        line.requestFocus()
     }
 
     override fun show() {
@@ -185,9 +220,10 @@ class PlayerControls(
     fun paint() {
         play.setImageResource(if (exo.playWhenReady) R.drawable.ic_pause else R.drawable.ic_play)
         val duration = exo.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
-        timeNow.text = time(exo.currentPosition)
-        timeLeft.text = if (duration > 0) "-" + time(duration - exo.currentPosition) else "--:--"
-        line.played = if (duration > 0) exo.currentPosition.toFloat() / duration else 0f
+        val at = scrubTo ?: exo.currentPosition
+        timeNow.text = time(at)
+        timeLeft.text = if (duration > 0) "-" + time(duration - at) else "--:--"
+        line.played = if (duration > 0) at.toFloat() / duration else 0f
         line.loaded = if (duration > 0) exo.bufferedPosition.toFloat() / duration else 0f
         stats?.let { it.text = statsText() }
     }

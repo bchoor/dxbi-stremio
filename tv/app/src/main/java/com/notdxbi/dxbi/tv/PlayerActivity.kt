@@ -244,11 +244,17 @@ class PlayerActivity : AppCompatActivity() {
         autoSkip = stream.optString("autoSkip", "off")
         showClock = stream.optBoolean("clock", true)
         torrent = stream.optBoolean("torrent", false)
-        findViewById<TextView>(R.id.title).text = stream.optString("title")
+        // "plain": no words over the picture (title, details, button names): Marquee's player
+        val plain = stream.optBoolean("plain", false)
+        findViewById<TextView>(R.id.title).apply {
+            text = stream.optString("title")
+            if (plain) visibility = View.GONE
+        }
         findViewById<TextView>(R.id.subtitle).apply {
             text = stream.optString("subtitle")
-            visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
+            visibility = if (plain || text.isNullOrEmpty()) View.GONE else View.VISIBLE
         }
+        if (plain) findViewById<View>(R.id.ctl_hint)?.tag = "plain"
 
         stream.optJSONObject("subtitleStyle")?.let { styleSubtitles(it) }
 
@@ -415,13 +421,11 @@ class PlayerActivity : AppCompatActivity() {
             if (upNextCard.visibility == View.VISIBLE) return super.dispatchKeyEvent(event)
             if (!controls.visible) {
                 when (event.keyCode) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { seek(-1); return true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { seek(+1); return true }
-                    // OK brings the controls up (pause from their play button, or the remote's play/pause key)
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { controls.show(); return true }
-                    // Up/Down jump 5 minutes
-                    KeyEvent.KEYCODE_DPAD_UP -> { seek(+1, BIG_SEEK_MS); return true }
-                    KeyEvent.KEYCODE_DPAD_DOWN -> { seek(-1, BIG_SEEK_MS); return true }
+                    // Left/Right bring up the timeline and move along it (faster the longer they're held);
+                    // the key goes on to the timeline, which takes it from here
+                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { controls.scrub(); return super.dispatchKeyEvent(event) }
+                    // OK, Up and Down bring the controls up (pause from their play button, or the remote's play/pause key)
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { controls.show(); return true }
                 }
             }
         }
@@ -750,6 +754,5 @@ class PlayerActivity : AppCompatActivity() {
         const val EXTRA_STREAM = "stream"
         private const val PROGRESS_INTERVAL_MS = 5000L
         private const val SEEK_STEP_MS = 10_000L
-        private const val BIG_SEEK_MS = 300_000L
     }
 }

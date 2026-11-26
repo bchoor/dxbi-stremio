@@ -46,6 +46,7 @@ object Play : PlaybackBus.Listener {
             .put("sourceKey", source.key)
             .put("accent", "#F5B544")
             .put("clock", true)
+            .put("plain", true)
             .put("videoId", videoId)
             .put("subtitles", subtitles)
         source.headers?.let { stream.put("headers", it) }
