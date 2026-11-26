@@ -5,6 +5,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Bundle
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -57,6 +58,12 @@ class TitleActivity : AppCompatActivity() {
     private lateinit var sourcesStatus: TextView
     private lateinit var filterRow: LinearLayout
     private lateinit var addonRow: LinearLayout
+    private lateinit var backButton: View
+    private lateinit var buttonsRow: LinearLayout
+    private lateinit var sourcesList: RecyclerView
+    /** Where the remote was on each side, to land there again when it comes back */
+    private var lastLeft: View? = null
+    private var lastRight: View? = null
     private val adapter = SourcesAdapter { play(it) }
     private var trailerYt: String? = null
 
@@ -93,7 +100,8 @@ class TitleActivity : AppCompatActivity() {
 
         val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false; setPadding(dp(40), dp(24), dp(24), dp(20)) }
         val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
-        left.addView(iconButton(R.drawable.ic_mq_back, "Back").apply { setOnClickListener { finish() } }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        backButton = iconButton(R.drawable.ic_mq_back, "Back").apply { setOnClickListener { finish() } }
+        left.addView(backButton, LinearLayout.LayoutParams(dp(40), dp(40)))
         // the title's own logo art when it has one (as Netflix shows), else its name
         logo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_START; adjustViewBounds = true; visibility = View.GONE }
         left.addView(logo, LinearLayout.LayoutParams(dp(380), dp(96)).apply { topMargin = dp(16) })
@@ -108,6 +116,7 @@ class TitleActivity : AppCompatActivity() {
         left.addView(facts, LinearLayout.LayoutParams(dp(500), LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
+        buttonsRow = buttons
         val gap = { LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) } }
         playButton = pillButton(R.drawable.ic_mq_play, "Play", primary = true, sub = "Finding sources…").apply { setOnClickListener { sources.firstOrNull()?.let { play(it) } } }
         trailerButton = pillButton(R.drawable.ic_mq_trailer, "Trailer").apply { visibility = View.GONE; setOnClickListener { trailerYt?.let { Play.trailer(this@TitleActivity, it) } } }
@@ -154,6 +163,7 @@ class TitleActivity : AppCompatActivity() {
         val list = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(context)
             adapter = this@TitleActivity.adapter
+            sourcesList = this
             itemAnimator = null
             clipToPadding = false
             setPadding(0, dp(4), 0, dp(40))
@@ -162,6 +172,106 @@ class TitleActivity : AppCompatActivity() {
         body.addView(right, LinearLayout.LayoutParams(dp(400), LinearLayout.LayoutParams.MATCH_PARENT))
         root.addView(body, match())
         setContentView(root)
+        root.viewTreeObserver.addOnGlobalFocusChangeListener { _, now ->
+            if (now == null) return@addOnGlobalFocusChangeListener
+            if (inside(right, now)) lastRight = now else if (inside(left, now)) lastLeft = now
+        }
+        rightPane = right
+        leftPane = left
+    }
+
+    private lateinit var leftPane: View
+    private lateinit var rightPane: View
+
+    private fun inside(parent: View, v: View): Boolean {
+        var p: View? = v
+        while (p != null) { if (p === parent) return true; p = p.parent as? View }
+        return false
+    }
+
+    // ---- The remote: ◀ ▶ switch between the two sides, ▲ ▼ move only within the side you're on ----
+
+    /** A line the remote moves along: chips or buttons side by side, or a list */
+    private sealed class Line {
+        class Views(val views: () -> List<View>) : Line()
+        class Strip(val list: RecyclerView, val vertical: Boolean) : Line()
+    }
+
+    private fun shownChildren(row: LinearLayout) = (0 until row.childCount).map { row.getChildAt(it) }.filter { it.visibility == View.VISIBLE && it.isFocusable }
+
+    private fun leftLines(): List<Line> = listOfNotNull(
+        Line.Views { listOf(backButton) },
+        Line.Views { shownChildren(buttonsRow) },
+        if (episodesBox.visibility == View.VISIBLE) Line.Views { shownChildren(seasonsRow) } else null,
+        if (episodesBox.visibility == View.VISIBLE) Line.Strip(episodesList, vertical = false) else null,
+    )
+
+    private fun rightLines(): List<Line> = listOfNotNull(
+        if (addonRow.childCount > 0) Line.Views { shownChildren(addonRow) } else null,
+        Line.Views { shownChildren(filterRow) },
+        if ((sourcesList.adapter?.itemCount ?: 0) > 0) Line.Strip(sourcesList, vertical = true) else null,
+    )
+
+    private fun itemAt(list: RecyclerView, pos: Int, then: (View) -> Unit = {}) {
+        val n = list.adapter?.itemCount ?: 0
+        if (pos !in 0 until n) return
+        list.findViewHolderForAdapterPosition(pos)?.itemView?.let { if (it.requestFocus()) { then(it); return } }
+        list.scrollToPosition(pos)
+        list.post { list.findViewHolderForAdapterPosition(pos)?.itemView?.requestFocus() }
+    }
+
+    /** Lands on a line: its chosen chip (or first), or the list's first item */
+    private fun enter(line: Line) {
+        when (line) {
+            is Line.Views -> line.views().let { v -> (v.firstOrNull { it.isSelected } ?: v.firstOrNull())?.requestFocus() }
+            is Line.Strip -> {
+                val chosen = (line.list.adapter as? EpisodesAdapter)?.let { a -> a.items.indexOfFirst { it.optString("id") == a.chosen } } ?: -1
+                itemAt(line.list, if (chosen >= 0) chosen else 0)
+            }
+        }
+    }
+
+    private fun goToSide(toRight: Boolean) {
+        val last = if (toRight) lastRight else lastLeft
+        if (last != null && last.isAttachedToWindow && last.isShown && last.requestFocus()) return
+        if (toRight) rightLines().let { (it.lastOrNull { l -> l is Line.Strip } ?: it.firstOrNull())?.let(::enter) }
+        else playButton.requestFocus()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        if (event.action != KeyEvent.ACTION_DOWN || code !in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT))
+            return super.dispatchKeyEvent(event)
+        val f = currentFocus ?: return super.dispatchKeyEvent(event)
+        val onRight = inside(rightPane, f)
+        if (!onRight && !inside(leftPane, f)) return super.dispatchKeyEvent(event)
+        val lines = if (onRight) rightLines() else leftLines()
+        val li = lines.indexOfFirst { l ->
+            when (l) { is Line.Views -> l.views().any { inside(it, f) }; is Line.Strip -> inside(l.list, f) }
+        }
+        if (li < 0) return super.dispatchKeyEvent(event)
+        val line = lines[li]
+        // position along the line, and how long it is
+        val (pos, count) = when (line) {
+            is Line.Views -> line.views().let { v -> v.indexOfFirst { inside(it, f) } to v.size }
+            is Line.Strip -> (line.list.findContainingItemView(f)?.let { line.list.getChildAdapterPosition(it) } ?: 0) to (line.list.adapter?.itemCount ?: 0)
+        }
+        val alongIsVertical = line is Line.Strip && line.vertical
+        fun step(d: Int): Boolean {
+            val to = pos + d
+            if (to !in 0 until count) return false
+            when (line) { is Line.Views -> line.views()[to].requestFocus(); is Line.Strip -> itemAt(line.list, to) }
+            return true
+        }
+        fun lineUp() { if (li > 0) enter(lines[li - 1]) }
+        fun lineDown() { if (li < lines.size - 1) enter(lines[li + 1]) }
+        when (code) {
+            KeyEvent.KEYCODE_DPAD_UP -> if (alongIsVertical) { if (!step(-1)) lineUp() } else lineUp()
+            KeyEvent.KEYCODE_DPAD_DOWN -> if (alongIsVertical) step(+1) else lineDown()
+            KeyEvent.KEYCODE_DPAD_LEFT -> if (alongIsVertical || !step(-1)) { if (onRight) goToSide(toRight = false) }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> if (alongIsVertical || !step(+1)) { if (!onRight) goToSide(toRight = true) }
+        }
+        return true
     }
 
     private fun fill(meta: JSONObject) {
@@ -472,7 +582,7 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
 }
 
 /** A season's episodes as small pictures; the chosen one has a gold ring */
-class EpisodesAdapter(private val items: List<JSONObject>, var chosen: String, private val onPick: (JSONObject) -> Unit) : RecyclerView.Adapter<EpisodesAdapter.Holder>() {
+class EpisodesAdapter(val items: List<JSONObject>, var chosen: String, private val onPick: (JSONObject) -> Unit) : RecyclerView.Adapter<EpisodesAdapter.Holder>() {
     class Holder(val card: FrameLayout, val image: ImageView, val words: TextView) : RecyclerView.ViewHolder(card)
 
     override fun getItemCount() = items.size
