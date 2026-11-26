@@ -167,15 +167,24 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var skipButton: TextView
     // A torrent played on the TV itself: how it's going, while the picture waits for it
     private var torrent = false
+    private var waitingSince = 0L
+    private var everReady = false
     private val torrentStatus = object : Runnable {
         override fun run() {
             val exo = player
             val waiting = exo == null || exo.playbackState == Player.STATE_BUFFERING || exo.playbackState == Player.STATE_IDLE
-            val text = if (torrent && waiting) TorrentEngine.status() else null
+            // Any other stream: how long it has been waiting, so slow (an Easynews start) can be
+            // told from stuck (Back tries another source)
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (!waiting) waitingSince = 0L else if (waitingSince == 0L) waitingSince = now
+            val waited = if (waitingSince > 0L) (now - waitingSince) / 1000 else 0L
+            val text = if (torrent && waiting) TorrentEngine.status()
+                else if (waiting && waited >= 2) "${if (everReady) "Buffering" else "Starting the stream"} · $waited s"
+                else null
             if (text != null) {
                 seekFlash.text = text
                 seekFlash.visibility = View.VISIBLE
-            } else if (seekFlash.text.contains("peer") || seekFlash.text.startsWith("Finding")) {
+            } else if (seekFlash.text.contains("peer") || seekFlash.text.startsWith("Finding") || seekFlash.text.startsWith("Buffering ·") || seekFlash.text.startsWith("Starting the stream")) {
                 seekFlash.visibility = View.GONE
             }
             handler.postDelayed(this, 700)
@@ -335,6 +344,7 @@ class PlayerActivity : AppCompatActivity() {
         exo.setMediaItem(item, stream.optLong("startMs", 0L).coerceAtLeast(0L))
         exo.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) everReady = true
                 if (state == Player.STATE_ENDED) finishWith(ended = true, next = upNextSeconds > 0 && !upNextDismissed)
             }
 
@@ -368,7 +378,7 @@ class PlayerActivity : AppCompatActivity() {
         handler.postDelayed(reportProgress, PROGRESS_INTERVAL_MS)
         if (showClock) handler.post(updateClock)
         handler.postDelayed(checkSkip, 500)
-        if (torrent) handler.post(torrentStatus)
+        handler.post(torrentStatus)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             // Back closes an open panel, then hides the controls, then leaves the player (the position is kept)
