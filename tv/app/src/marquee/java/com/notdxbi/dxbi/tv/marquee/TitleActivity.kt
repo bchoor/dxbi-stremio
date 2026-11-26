@@ -265,15 +265,23 @@ class TitleActivity : AppCompatActivity() {
                 launch {
                     val started = System.currentTimeMillis()
                     var http = "ok"
-                    val got = withTimeoutOrNull(30_000) {
+                    suspend fun ask() = withTimeoutOrNull(30_000) {
                         try { Api.get(a.streamUrl(item.type, id)).optJSONArray("streams").objects().map { Source(a, it) } }
                         catch (e: Exception) { http = e.message ?: "error"; null }
+                    }
+                    var got = ask()
+                    // AIOStreams answers empty when the services behind it (Easynews) were too slow that time: ask once more
+                    if (got != null && got.isEmpty() && a.base.contains("aiostreams", ignoreCase = true)) {
+                        kotlinx.coroutines.delay(3_000)
+                        got = ask() ?: got
                     }
                     if (got == null && http == "ok") http = "timed out"
                     val playable = got.orEmpty().filter { it.url.isNotEmpty() }
                     android.util.Log.i("MarqueeStreams", "addon=${a.name} host=${android.net.Uri.parse(a.base).host} http=$http streams=${got?.size ?: 0} withUrl=${playable.size} ms=${System.currentTimeMillis() - started}")
                     asking--
-                    if (got == null) failed[a.name] = http
+                    // (Local Files only answers when the Stremio app's own server is running: not a failure worth showing)
+                    val local = android.net.Uri.parse(a.base).host.let { it == "127.0.0.1" || it == "localhost" }
+                    if (got == null && !local) failed[a.name] = http
                     if (playable.isNotEmpty()) counts[a.name] = playable.size
                     merge(playable)
                     addonChips()
