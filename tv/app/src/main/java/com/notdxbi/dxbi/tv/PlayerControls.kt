@@ -567,7 +567,11 @@ class PlayerControls(
 
         lines += ""
         lines += "— NETWORK —"
-        lines += "Buffered %.0f s ahead".format(exo.totalBufferedDuration / 1000f) + (if (bandwidth > 0) " · speed %.0f Mbps".format(bandwidth / 1_000_000f) else "")
+        // seconds of video downloaded ahead of what's playing, against the 50 s the player fills up to (Media3's default)
+        val ahead = exo.totalBufferedDuration / 1000f
+        val full = (ahead / 50f * 20).toInt().coerceIn(0, 20)
+        lines += "Buffer [" + "■".repeat(full) + "·".repeat(20 - full) + "] %.1f s ahead of 50 s".format(ahead)
+        if (bandwidth > 0) lines += "Download speed %.0f Mbps".format(bandwidth / 1_000_000f)
         lines += "Stalls $stalls" + (if (firstFrameMs >= 0) " · started in %.1f s".format(firstFrameMs / 1000f) else "")
         val stream = org.json.JSONObject(activity.intent.getStringExtra(PlayerActivity.EXTRA_STREAM) ?: "{}")
         android.net.Uri.parse(stream.optString("url")).host?.let { lines += "From $it" }
