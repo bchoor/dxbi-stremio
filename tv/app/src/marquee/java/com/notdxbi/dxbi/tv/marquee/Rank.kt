@@ -55,9 +55,9 @@ class Source(val addon: Addon, val json: JSONObject) {
     val audio: String = run {
         val atmos = has("""\batmos\b""")
         var a = when {
-            has("""\btrue[ .-]?hd\b""") -> "TrueHD"
+            has("""\btrue[ .-]?hd""") -> "TrueHD"
             has("""\b(?:ddp|dd\+|e-?ac-?3|dolby[ .-]?digital[ .-]?plus)""") -> "DD+"
-            has("""\bdts[ .-]?(?:hd|ma|x)\b|\bdts-hd""") -> "DTS-HD"
+            has("""\bdts[ .-]?(?:hd|ma|x)""") -> "DTS-HD"
             has("""\bdts\b""") -> "DTS"
             has("""\b(?:dd|ac-?3|dolby[ .-]?digital)[ .]?(?:[257]\.[01])?\b""") -> "DD"
             has("""\bflac\b""") -> "FLAC"
@@ -106,7 +106,7 @@ class Source(val addon: Addon, val json: JSONObject) {
     fun badges(): List<Pair<String, Badge>> = buildList {
         if (dv7) add("PLAYS AS HDR10" to Badge.LINE)
         // sound: ✓ when the soundbar gets it as it is, → DD+ when it's converted
-        if (audio.isNotEmpty()) add(if (converted) "${audio.uppercase()} → DD+" to Badge.WARN else "${audio.uppercase()} ✓" to Badge.GO)
+        if (audio.isNotEmpty()) add(if (converted) "${audio.uppercase()} → DD+ 5.1" to Badge.WARN else "${audio.uppercase()} ✓" to Badge.GO)
         if (imax) add("IMAX" to Badge.GOLD)
         if (kind == "Remux") add("REMUX" to Badge.LINE) else if (kind == "BluRay") add("BLU-RAY" to Badge.LINE) else if (kind == "WEB") add("WEB" to Badge.LINE)
         if (instant) add("⚡ INSTANT" to Badge.GOLD)
