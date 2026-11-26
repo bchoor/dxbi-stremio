@@ -52,7 +52,7 @@ fun Context.label(text: CharSequence = "", sizeSp: Float = 14f, color: Int = Ui.
 
 fun Context.badge(text: String, kind: Badge) = label(text, 10f, bold = true).apply {
     val (fg, bg, line) = when (kind) {
-        Badge.SOLID -> Triple(Ui.BG, Ui.TEXT, 0)
+        Badge.SOLID -> Triple(Ui.BG, Ui.PEACH, 0)
         Badge.LINE -> Triple(Ui.TEXT, Color.TRANSPARENT, 0xFF6E7480.toInt())
         Badge.WARN -> Triple(Ui.WARN, Ui.WARN_BG, 0)
         Badge.GOLD -> Triple(Ui.ACCENT, Color.TRANSPARENT, Ui.ACCENT)

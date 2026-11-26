@@ -50,6 +50,19 @@ class Source(val addon: Addon, val json: JSONObject) {
     val dv7: Boolean = dv && (kind == "Remux" || kind == "BluRay") && !has("""\b(?:p8|dv ?8|profile ?8)\b""")
     val hdr: Boolean = dv || has("""\bhdr(?:10\+?)?\b""")
     val imax: Boolean = has("""\bimax\b""")
+    /** Which cut of the film it is, when the name says (a plain release says nothing) */
+    val edition: String = when {
+        has("""\bextended\b""") -> "EXTENDED"
+        has("""\bdirector'?s?[ .-]?cut\b|\bdc\b""") -> "DIRECTOR'S CUT"
+        has("""\bfinal[ .-]?cut\b""") -> "FINAL CUT"
+        has("""\bunrated\b""") -> "UNRATED"
+        has("""\buncut\b""") -> "UNCUT"
+        has("""\bspecial[ .-]?edition\b""") -> "SPECIAL EDITION"
+        has("""\bcriterion\b""") -> "CRITERION"
+        has("""\btheatrical\b""") -> "THEATRICAL"
+        else -> ""
+    }
+    val remastered: Boolean = has("""\bremaster(?:ed)?\b""")
     val lesser: Boolean = has("""\b(?:ai[ ._-]?upscal\w*|upscal\w*|\d{2,3}fps|hfr|3d|h?sbs)\b""")
 
     val audio: String = run {
@@ -104,6 +117,8 @@ class Source(val addon: Addon, val json: JSONObject) {
 
     /** Short badges for the card, in reading order (the resolution and picture are on the tile) */
     fun badges(): List<Pair<String, Badge>> = buildList {
+        if (edition.isNotEmpty()) add(edition to Badge.SOLID)
+        if (remastered) add("REMASTERED" to Badge.LINE)
         if (dv7) add("PLAYS AS HDR10" to Badge.LINE)
         // sound: ✓ when the soundbar gets it as it is, → DD+ when it's converted
         if (audio.isNotEmpty()) add(if (converted) "${audio.uppercase()} → DD+ 5.1" to Badge.WARN else "${audio.uppercase()} ✓" to Badge.GO)
