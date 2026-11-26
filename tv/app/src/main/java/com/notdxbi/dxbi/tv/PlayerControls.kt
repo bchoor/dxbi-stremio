@@ -238,8 +238,12 @@ class PlayerControls(
         panelRows.addView(this)
     }
 
-    private fun row(text: String, on: Boolean, keepOpen: Boolean = false, action: () -> Unit): TextView = TextView(activity).apply {
+    /** Track rows: picking one switches straight away and the menu stays open, to try the next */
+    private val pickRows = mutableListOf<TextView>()
+
+    private fun row(text: String, on: Boolean, keepOpen: Boolean = false, pick: Boolean = false, action: () -> Unit): TextView = TextView(activity).apply {
         this.text = if (on) "✓  $text" else text
+        if (pick) { contentDescription = text; pickRows.add(this) }
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
         gravity = Gravity.CENTER_VERTICAL
         minHeight = dp(42)
@@ -250,7 +254,12 @@ class PlayerControls(
         setOnFocusChangeListener { view, has ->
             (view as TextView).setTextColor(if (has) Color.BLACK else if (on) Color.WHITE else Color.argb(204, 255, 255, 255))
         }
-        setOnClickListener { action(); if (!keepOpen) closePanel() }
+        setOnClickListener {
+            action()
+            if (pick) for (r in pickRows) r.text = if (r === this) "✓  ${r.contentDescription}" else r.contentDescription
+            else if (!keepOpen) closePanel()
+            poke()
+        }
         panelRows.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         tag = if (on) "on" else null
     }
@@ -312,6 +321,7 @@ class PlayerControls(
 
     private fun showTracks(from: View, type: Int, title: String) {
         openPanel(from, title)
+        pickRows.clear()
         val groups = exo.currentTracks.groups.filter { it.type == type }
         val anySelected = groups.any { it.isSelected }
         if (type == C.TRACK_TYPE_TEXT && anySelected) {
@@ -323,7 +333,7 @@ class PlayerControls(
         }
         if (type == C.TRACK_TYPE_TEXT) {
             if (anySelected) heading("Track")
-            row("Off", !anySelected) {
+            row("Off", !anySelected, pick = true) {
                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                     .clearOverridesOfType(type).setTrackTypeDisabled(type, true).build()
             }
@@ -342,7 +352,7 @@ class PlayerControls(
                 row("$name$channels$kind · can't play here", false) {}
                 continue
             }
-            row(name + channels + kind, group.isTrackSelected(i)) {
+            row(name + channels + kind, group.isTrackSelected(i), pick = true) {
                 exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                     .setTrackTypeDisabled(type, false)
                     .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, i))
