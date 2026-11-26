@@ -97,7 +97,7 @@ data class Item(
     }
 }
 
-class Row(val title: String, val items: List<Item>, val wide: Boolean = false)
+class Row(val title: String, val items: List<Item>, val wide: Boolean = false, val kind: String = "")
 
 /** Stremio's account services and the add-ons' own APIs, called directly: no web page in between */
 object Api {

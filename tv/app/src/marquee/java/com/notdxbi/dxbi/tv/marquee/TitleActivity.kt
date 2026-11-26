@@ -33,6 +33,11 @@ class TitleActivity : AppCompatActivity() {
     private var autoplay = false
     private val sources = mutableListOf<Source>()
     private var filter = "All"
+    /** Only this add-on's sources (null: all of them) */
+    private var addonFilter: String? = null
+    private val counts = LinkedHashMap<String, Int>()
+    private val failed = LinkedHashMap<String, String>()
+    private var asking = 0
     private var loadJob: Job? = null
     private var episodes: List<JSONObject> = emptyList()
     private var season = 1
@@ -49,6 +54,7 @@ class TitleActivity : AppCompatActivity() {
     private lateinit var episodesList: RecyclerView
     private lateinit var sourcesStatus: TextView
     private lateinit var filterRow: LinearLayout
+    private lateinit var addonRow: LinearLayout
     private val adapter = SourcesAdapter({ play(it) }, { Play.inVlc(this, it, playTitle()) })
     private var trailerYt: String? = null
 
@@ -97,7 +103,7 @@ class TitleActivity : AppCompatActivity() {
         val gap = { LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) } }
         playButton = pillButton(R.drawable.ic_mq_play, "Play", primary = true, sub = "Finding sources…").apply { setOnClickListener { sources.firstOrNull()?.let { play(it) } } }
         trailerButton = pillButton(R.drawable.ic_mq_trailer, "Trailer").apply { visibility = View.GONE; setOnClickListener { trailerYt?.let { Play.trailer(this@TitleActivity, it) } } }
-        watchButton = pillButton(R.drawable.ic_mq_bookmark, "Watchlist").apply { setOnClickListener { toggleWatchlist() } }
+        watchButton = pillButton(R.drawable.ic_mq_add, "My List").apply { setOnClickListener { toggleWatchlist() } }
         buttons.addView(playButton, gap()); buttons.addView(trailerButton, gap()); buttons.addView(watchButton, gap())
         left.addView(buttons, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) })
 
@@ -127,8 +133,10 @@ class TitleActivity : AppCompatActivity() {
         sourcesStatus = label("", 11f, Ui.MUTED)
         head.addView(sourcesStatus, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(10) })
         right.addView(head)
-        filterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(2), dp(10), dp(2), dp(8)) }
-        for (f in listOf("All", "4K", "1080p", "DV", "Instant")) {
+        addonRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(2), dp(10), dp(2), 0) }
+        right.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(addonRow) })
+        filterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(2), dp(8), dp(2), dp(8)) }
+        for (f in listOf("All", "4K", "1080p", "DV", "Atmos", "Instant")) {
             filterRow.addView(chip(f).apply {
                 isSelected = f == filter
                 setOnClickListener { filter = f; for (i in 0 until filterRow.childCount) filterRow.getChildAt(i).isSelected = filterRow.getChildAt(i) == this; render() }
@@ -213,22 +221,34 @@ class TitleActivity : AppCompatActivity() {
     private fun loadSources() {
         loadJob?.cancel()
         sources.clear()
+        counts.clear()
+        failed.clear()
+        addonFilter = null
         render()
         val id = videoId
         val askers = Session.addons.filter { it.supports("stream", item.type, id) }
         if (askers.isEmpty()) { sourcesStatus.text = "None of your add-ons has sources for this"; return }
-        var answered = 0
-        sourcesStatus.text = "Asking ${askers.size} add-ons…"
+        asking = askers.size
+        status()
         setPill(playButton, null, playWord(), "Finding sources…")
         loadJob = lifecycleScope.launch {
             val jobs = askers.map { a ->
                 launch {
+                    val started = System.currentTimeMillis()
+                    var http = "ok"
                     val got = withTimeoutOrNull(30_000) {
-                        try { Api.get(a.url("stream", item.type, id)).optJSONArray("streams").objects().map { Source(a, it) } } catch (_: Exception) { emptyList() }
-                    } ?: emptyList()
-                    answered++
-                    merge(got.filter { it.url.isNotEmpty() })
-                    sourcesStatus.text = "${sources.size} · $answered of ${askers.size} add-ons answered"
+                        try { Api.get(a.url("stream", item.type, id)).optJSONArray("streams").objects().map { Source(a, it) } }
+                        catch (e: Exception) { http = e.message ?: "error"; null }
+                    }
+                    if (got == null && http == "ok") http = "timed out"
+                    val playable = got.orEmpty().filter { it.url.isNotEmpty() }
+                    android.util.Log.i("MarqueeStreams", "addon=${a.name} host=${android.net.Uri.parse(a.base).host} http=$http streams=${got?.size ?: 0} withUrl=${playable.size} ms=${System.currentTimeMillis() - started}")
+                    asking--
+                    if (got == null) failed[a.name] = http
+                    if (playable.isNotEmpty()) counts[a.name] = playable.size
+                    merge(playable)
+                    addonChips()
+                    status()
                 }
             }
             if (autoplay) {
@@ -237,8 +257,35 @@ class TitleActivity : AppCompatActivity() {
                 sources.firstOrNull()?.let { play(it) }
             }
             jobs.joinAll()
-            if (sources.isEmpty()) { sourcesStatus.text = "No sources found"; setPill(playButton, null, playWord(), "No sources") }
+            if (sources.isEmpty()) setPill(playButton, null, playWord(), "No sources")
         }
+    }
+
+    /** "8 sources", plus any add-on that failed (the ones with nothing for this title stay quiet) */
+    private fun status() {
+        val parts = mutableListOf<String>()
+        parts += if (sources.isEmpty() && asking == 0) "No sources found" else "${sources.size} sources"
+        if (asking > 0) parts += "still asking $asking"
+        failed.forEach { (name, why) -> parts += "$name failed ($why)" }
+        sourcesStatus.text = parts.joinToString(" · ")
+    }
+
+    /** One chip per add-on that had sources: All · Torrentio 5 · AIOStreams 3 */
+    private fun addonChips() {
+        val had = addonRow.findFocus() != null
+        addonRow.removeAllViews()
+        val names = listOf<String?>(null) + counts.keys
+        for (n in names) {
+            addonRow.addView(chip(if (n == null) "All add-ons" else "$n ${counts[n]}").apply {
+                isSelected = n == addonFilter
+                setOnClickListener {
+                    addonFilter = n
+                    for (i in 0 until addonRow.childCount) addonRow.getChildAt(i).isSelected = addonRow.getChildAt(i) == this
+                    render()
+                }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+        }
+        if (had) addonRow.getChildAt(names.indexOf(addonFilter).coerceAtLeast(0))?.requestFocus()
     }
 
     private fun merge(got: List<Source>) {
@@ -251,16 +298,17 @@ class TitleActivity : AppCompatActivity() {
 
     private fun render() {
         adapter.items = sources.filter {
-            when (filter) {
+            (addonFilter == null || it.addon.name == addonFilter) && when (filter) {
                 "4K" -> it.res >= 2160
                 "1080p" -> it.res in 1080..2159
                 "DV" -> it.dv
+                "Atmos" -> it.audio.contains("Atmos")
                 "Instant" -> it.instant
                 else -> true
             }
         }
         adapter.notifyDataSetChanged()
-        sources.firstOrNull()?.let { best -> setPill(playButton, null, playWord(), best.badges().take(3).joinToString(" · ") { it.first }) }
+        sources.firstOrNull()?.let { best -> setPill(playButton, null, playWord(), (listOf(best.resLabel, best.pictureLabel, best.audio).filter { it.isNotEmpty() }).joinToString(" · ")) }
     }
 
     private fun resumeMs(): Long {
@@ -284,18 +332,23 @@ class TitleActivity : AppCompatActivity() {
 
     private fun updateWatchButton() {
         val on = Play.inWatchlist(item.id)
-        setPill(watchButton, if (on) R.drawable.ic_mq_bookmark_added else R.drawable.ic_mq_bookmark, if (on) "In watchlist" else "Watchlist")
+        setPill(watchButton, if (on) R.drawable.ic_mq_check else R.drawable.ic_mq_add, "My List")
     }
 
     private fun toggleWatchlist() {
         val on = !Play.inWatchlist(item.id)
         Play.setWatchlist(item, on) { ok ->
-            if (ok) updateWatchButton() else Toast.makeText(this, "Couldn't update your watchlist", Toast.LENGTH_SHORT).show()
+            if (ok) updateWatchButton() else Toast.makeText(this, "Couldn't update My List", Toast.LENGTH_SHORT).show()
         }
     }
 }
 
-/** The sources list: what each one is (badges), its name, where it's from, and a VLC button */
+/**
+ * The sources list, one card each:
+ *   [ 4K ]  DD+ ATMOS ✓  WEB  ⚡ INSTANT        19.4 GB
+ *   [ DV ]  Dune.Part.Two.2024.2160p.WEB-DL…
+ *           Torrentio · RD+                     [VLC]
+ */
 class SourcesAdapter(private val onPlay: (Source) -> Unit, private val onVlc: (Source) -> Unit) : RecyclerView.Adapter<SourcesAdapter.Holder>() {
     var items: List<Source> = emptyList()
 
@@ -303,18 +356,20 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit, private val onVlc: (S
     override fun getItemId(position: Int) = items[position].key.hashCode().toLong()
     override fun getItemCount() = items.size
 
-    class Holder(view: View, val main: LinearLayout, val badges: LinearLayout, val name: TextView, val from: TextView, val vlc: ImageView) : RecyclerView.ViewHolder(view)
+    class Holder(view: View, val main: LinearLayout, val res: TextView, val pic: TextView, val badges: LinearLayout, val size: TextView,
+                 val name: TextView, val from: TextView, val vlc: TextView) : RecyclerView.ViewHolder(view)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val ctx = parent.context
+        val wrap = LinearLayout.LayoutParams.WRAP_CONTENT
         val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = ctx.dp(4) }
         }
         val main = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(ctx.dp(10), ctx.dp(8), ctx.dp(10), ctx.dp(8))
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(ctx.dp(8), ctx.dp(8), ctx.dp(10), ctx.dp(8))
             isFocusable = true
             isClickable = true
             background = StateListDrawable().apply {
@@ -322,27 +377,68 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit, private val onVlc: (S
                 addState(intArrayOf(), round(Color.TRANSPARENT, 8, ctx))
             }
         }
+        // the tile: resolution, and the picture under it
+        val tile = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = round(Ui.SURFACE_2, 6, ctx)
+            setPadding(ctx.dp(4), ctx.dp(6), ctx.dp(4), ctx.dp(6))
+        }
+        val res = ctx.label("", 15f, bold = true).apply { gravity = Gravity.CENTER }
+        val pic = ctx.label("", 10f, Ui.ACCENT, bold = true).apply { gravity = Gravity.CENTER }
+        tile.addView(res); tile.addView(pic)
+        main.addView(tile, LinearLayout.LayoutParams(ctx.dp(52), ctx.dp(52)).apply { marginEnd = ctx.dp(10) })
+
+        val words = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        val top = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val badges = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        main.addView(badges)
-        val name = ctx.label("", 12f, lines = 2)
-        main.addView(name, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(5) })
+        top.addView(badges, LinearLayout.LayoutParams(0, wrap, 1f))
+        val size = ctx.label("", 11f, Ui.MUTED, bold = true)
+        top.addView(size)
+        words.addView(top)
+        // the file name scrolls when the card is focused
+        val name = ctx.label("", 12f).apply {
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+            marqueeRepeatLimit = -1
+            isDuplicateParentStateEnabled = false
+        }
+        words.addView(name, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, wrap).apply { topMargin = ctx.dp(5) })
         val from = ctx.label("", 10f, Ui.MUTED)
-        main.addView(from, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = ctx.dp(3) })
-        row.addView(main, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        val vlc = ctx.iconButton(R.drawable.ic_mq_vlc, "Play in VLC", 34)
-        row.addView(vlc, LinearLayout.LayoutParams(ctx.dp(34), ctx.dp(34)).apply { marginStart = ctx.dp(6) })
-        return Holder(row, main, badges, name, from, vlc)
+        words.addView(from, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, wrap).apply { topMargin = ctx.dp(3) })
+        main.addView(words, LinearLayout.LayoutParams(0, wrap, 1f))
+        row.addView(main, LinearLayout.LayoutParams(0, wrap, 1f))
+
+        // opens this source in VLC instead of the built-in player
+        val vlc = ctx.label("VLC", 11f, bold = true).apply {
+            gravity = Gravity.CENTER
+            contentDescription = "Play in VLC"
+            setPadding(ctx.dp(8), ctx.dp(6), ctx.dp(8), ctx.dp(6))
+            background = StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_focused), round(Color.WHITE, 14, ctx))
+                addState(intArrayOf(), round(Ui.BUTTON, 14, ctx))
+            }
+            setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Ui.BG, Color.WHITE)))
+            focusGrow(1.08f)
+        }
+        row.addView(vlc, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = ctx.dp(6) })
+        main.onFocusChangeListener = View.OnFocusChangeListener { _, has -> name.isSelected = has }
+        return Holder(row, main, res, pic, badges, size, name, from, vlc)
     }
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val s = items[position]
         val ctx = holder.itemView.context
+        holder.res.text = s.resLabel
+        holder.pic.text = s.pictureLabel
+        holder.pic.visibility = if (s.pictureLabel.isEmpty()) View.GONE else View.VISIBLE
+        holder.pic.setTextColor(if (s.dv && !s.dv7) Ui.ACCENT else Ui.TEXT)
         holder.badges.removeAllViews()
         for ((text, kind) in s.badges()) holder.badges.addView(ctx.badge(text, kind), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(4) })
-        if (s.size.isNotEmpty()) holder.badges.addView(ctx.label(s.size, 11f, Ui.MUTED), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = ctx.dp(4) })
+        holder.size.text = s.size
         holder.name.text = s.fileName.ifEmpty { s.name }
         holder.from.text = s.from
-        holder.main.contentDescription = "${s.resLabel} ${s.audio} ${s.from}"
+        holder.main.contentDescription = "${s.resLabel} ${s.pictureLabel} ${s.audio} ${s.from}"
         holder.main.setOnClickListener { onPlay(s) }
         holder.vlc.setOnClickListener { onVlc(s) }
     }

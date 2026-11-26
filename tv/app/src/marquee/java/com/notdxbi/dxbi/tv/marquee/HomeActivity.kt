@@ -2,8 +2,10 @@ package com.notdxbi.dxbi.tv.marquee
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -13,6 +15,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
@@ -26,24 +29,34 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Home: a big picture of the focused title on top, rows of posters under it, icons on the left */
+/**
+ * Home, laid out like Netflix on a TV: a menu on the left that opens with its names when the remote
+ * goes into it, a big picture of the focused title, and rows of posters
+ */
 class HomeActivity : AppCompatActivity() {
     private lateinit var backdrop: ImageView
     private lateinit var heroTitle: TextView
     private lateinit var heroMeta: TextView
     private lateinit var heroText: TextView
-    private lateinit var watchButton: ImageView
+    private lateinit var listButton: LinearLayout
     private lateinit var rowsView: RecyclerView
     private lateinit var status: TextView
+    private lateinit var rail: LinearLayout
+    private lateinit var dim: View
+    private val railItems = mutableListOf<Pair<String, LinearLayout>>()
     private val rows = RowsAdapter({ show(it) }, { Session.open(this, it) })
+    /** Every row we have; [rows] shows the ones for the page chosen in the menu */
+    private val allRows = mutableListOf<Row>()
+    private var page = HOME
     private var hero: Item? = null
     private var loaded = false
     private var pictureJob: Job? = null
     private var focusedOnce = false
+    private var railOpen = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = FrameLayout(this).apply { setBackgroundColor(Ui.BG) }
+        val root = FrameLayout(this).apply { setBackgroundColor(Ui.BG); clipChildren = false }
 
         // the focused title's picture, top right, fading into the background
         val picture = FrameLayout(this)
@@ -54,9 +67,6 @@ class HomeActivity : AppCompatActivity() {
         picture.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Ui.BG, 0x000B0C0F)) },
             FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(160), Gravity.BOTTOM))
         root.addView(picture, FrameLayout.LayoutParams(dp(660), dp(372), Gravity.TOP or Gravity.END))
-
-        val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
-        body.addView(rail(), LinearLayout.LayoutParams(dp(76), LinearLayout.LayoutParams.MATCH_PARENT))
 
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
         content.addView(heroPanel(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(262)))
@@ -73,26 +83,123 @@ class HomeActivity : AppCompatActivity() {
             setItemViewCacheSize(4)
         }
         content.addView(rowsView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-        body.addView(content, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
-        root.addView(body, match())
+        root.addView(content, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply { marginStart = dp(RAIL_SHUT) })
+
+        // the page behind darkens while the menu is open
+        dim = View(this).apply { setBackgroundColor(0x99000000.toInt()); visibility = View.GONE }
+        root.addView(dim, match())
+        rail = menu()
+        root.addView(rail, FrameLayout.LayoutParams(dp(RAIL_SHUT), FrameLayout.LayoutParams.MATCH_PARENT, Gravity.START))
         setContentView(root)
+
+        root.viewTreeObserver.addOnGlobalFocusChangeListener { _, now -> openRail(now != null && inside(rail, now)) }
+        // Back: first to the menu (as Netflix does), then out of the app
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (railOpen) finish() else railItems.firstOrNull { it.first == page }?.second?.requestFocus()
+            }
+        })
     }
 
-    private fun rail(): LinearLayout = LinearLayout(this).apply {
+    private fun inside(parent: View, v: View): Boolean {
+        var p: View? = v
+        while (p != null) { if (p === parent) return true; p = p.parent as? View }
+        return false
+    }
+
+    // ---- The menu ----
+    private fun menu(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER_HORIZONTAL or Gravity.CENTER_VERTICAL
-        background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF00B0C0F.toInt(), 0x000B0C0F))
-        fun add(icon: Int, name: String, action: () -> Unit) = addView(iconButton(icon, name, 44, 0x00000000).apply { setOnClickListener { action() } },
-            LinearLayout.LayoutParams(dp(44), dp(44)).apply { topMargin = dp(10); bottomMargin = dp(10) })
-        add(R.drawable.ic_mq_search, "Search") { startActivity(Intent(this@HomeActivity, SearchActivity::class.java)) }
-        add(R.drawable.ic_mq_home, "Home") { focusRow(0) }
-        add(R.drawable.ic_mq_bookmark, "Watchlist") {
-            val i = rows.rows.indexOfFirst { it.title == WATCHLIST }
-            if (i >= 0) focusRow(i) else Toast.makeText(this@HomeActivity, "Your watchlist is empty", Toast.LENGTH_SHORT).show()
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(14), dp(24), dp(14), dp(24))
+        fun add(key: String, icon: Int, name: String, action: () -> Unit) {
+            val item = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                isFocusable = true
+                isClickable = true
+                contentDescription = name
+                background = StateListDrawable().apply {
+                    addState(intArrayOf(android.R.attr.state_focused), round(0x33FFFFFF, 8, context))
+                    addState(intArrayOf(), round(0x00000000, 8, context))
+                }
+                addView(ImageView(context).apply { setImageResource(icon) }, LinearLayout.LayoutParams(dp(24), dp(24)))
+                addView(context.label(name, 17f, bold = true).apply { visibility = View.GONE },
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(18) })
+                setOnClickListener { action() }
+            }
+            railItems.add(key to item)
+            addView(item, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4); bottomMargin = dp(4) })
         }
-        add(R.drawable.ic_mq_settings, "Settings") { settings() }
+        add("search", R.drawable.ic_mq_search, "Search") { startActivity(Intent(this@HomeActivity, SearchActivity::class.java)) }
+        add(HOME, R.drawable.ic_mq_home, "Home") { showPage(HOME) }
+        add(SHOWS, R.drawable.ic_mq_tv, "Shows") { showPage(SHOWS) }
+        add(MOVIES, R.drawable.ic_mq_movie, "Movies") { showPage(MOVIES) }
+        add(ANIME, R.drawable.ic_mq_anime, "Anime") { showPage(ANIME) }
+        add(MY_LIST, R.drawable.ic_mq_add, "My List") { showPage(MY_LIST) }
+        add("settings", R.drawable.ic_mq_settings, "Settings") { settings() }
+        paintRail()
     }
 
+    private fun openRail(open: Boolean) {
+        if (open == railOpen) return
+        railOpen = open
+        rail.layoutParams = rail.layoutParams.apply { width = dp(if (open) RAIL_OPEN else RAIL_SHUT) }
+        rail.background = if (open) GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xFA0B0C0F.toInt(), 0xEE0B0C0F.toInt(), 0x000B0C0F))
+            else GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xE60B0C0F.toInt(), 0x000B0C0F))
+        dim.visibility = if (open) View.VISIBLE else View.GONE
+        for ((_, item) in railItems) item.getChildAt(1).visibility = if (open) View.VISIBLE else View.GONE
+        paintRail()
+    }
+
+    /** The page you're on is gold; the rest white (names grey until the remote is on them) */
+    private fun paintRail() {
+        for ((key, item) in railItems) {
+            val here = key == page
+            (item.getChildAt(0) as ImageView).imageTintList = ColorStateList.valueOf(if (here) Ui.ACCENT else android.graphics.Color.WHITE)
+            (item.getChildAt(1) as TextView).setTextColor(ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
+                intArrayOf(android.graphics.Color.WHITE, if (here) Ui.ACCENT else Ui.MUTED)))
+            (item.getChildAt(1) as TextView).isDuplicateParentStateEnabled = true
+        }
+    }
+
+    private fun showPage(p: String) {
+        page = p
+        paintRail()
+        render()
+        val first = rows.rows.firstOrNull()?.items?.firstOrNull()
+        if (first != null) { show(first); focusRow(0) }
+        else {
+            status.visibility = View.VISIBLE
+            status.text = when (p) {
+                MY_LIST -> "My List is empty. Press ＋ My List on any title to add it."
+                ANIME -> "None of your add-ons has anime catalogs"
+                else -> "Nothing here yet"
+            }
+        }
+    }
+
+    /** Fills the rows for the chosen page */
+    private fun render() {
+        val shown = when (page) {
+            HOME -> allRows.toList()
+            MY_LIST -> allRows.filter { it.title == MY_LIST_ROW }
+            ANIME -> allRows.filter { it.kind == ANIME }
+            else -> {
+                val type = if (page == MOVIES) "movie" else "series"
+                allRows.filter { it.kind != ANIME }.mapNotNull { r ->
+                    r.items.filter { it.type == type }.takeIf { it.isNotEmpty() }?.let { Row(r.title, it, r.wide, r.kind) }
+                }
+            }
+        }
+        rows.rows.clear()
+        rows.rows.addAll(shown)
+        rows.notifyDataSetChanged()
+        if (shown.isNotEmpty()) status.visibility = View.GONE
+    }
+
+    // ---- The hero ----
     private fun heroPanel(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.BOTTOM
@@ -108,10 +215,8 @@ class HomeActivity : AppCompatActivity() {
         val gap = { LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) } }
         buttons.addView(pillButton(R.drawable.ic_mq_play, "Play", primary = true).apply { setOnClickListener { hero?.let { Session.open(this@HomeActivity, it, autoplay = true) } } }, gap())
         buttons.addView(pillButton(R.drawable.ic_mq_info, "More info").apply { setOnClickListener { hero?.let { Session.open(this@HomeActivity, it) } } }, gap())
-        buttons.addView(iconButton(R.drawable.ic_mq_trailer, "Trailer").apply { setOnClickListener { trailer() } },
-            LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(10) })
-        watchButton = iconButton(R.drawable.ic_mq_bookmark, "Add to watchlist").apply { setOnClickListener { toggleWatchlist() } }
-        buttons.addView(watchButton, LinearLayout.LayoutParams(dp(40), dp(40)))
+        listButton = pillButton(R.drawable.ic_mq_add, "My List").apply { setOnClickListener { toggleList() } }
+        buttons.addView(listButton, gap())
         addView(buttons, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(14) })
     }
 
@@ -141,7 +246,7 @@ class HomeActivity : AppCompatActivity() {
         }
         Session.addons = addons
         refreshLibrary()
-        val catalogs = addons.flatMap { it.homeCatalogs() }.filter { it.type == "movie" || it.type == "series" }.take(30)
+        val catalogs = addons.flatMap { it.homeCatalogs() }.filter { it.type == "movie" || it.type == "series" || it.type == "anime" }.take(40)
         // every catalog is asked at once; rows still appear in the add-ons' order
         val asked = catalogs.map { c ->
             c to async {
@@ -157,14 +262,19 @@ class HomeActivity : AppCompatActivity() {
         for ((c, answer) in asked) {
             val items = answer.await() ?: continue
             if (items.isEmpty()) continue
-            var title = "${c.name} ${typeName(c.type)}"
-            if (rows.rows.any { it.title == title }) title = "$title · ${c.addon.name}"
-            rows.rows.add(Row(title, items))
-            rows.notifyItemInserted(rows.rows.size - 1)
-            status.visibility = View.GONE
+            val kind = if (c.type == "anime" || c.addon.name.contains("anime", ignoreCase = true)) ANIME else c.type
+            var title = "${c.name} ${if (kind == ANIME && c.type != "anime") "Anime" else typeName(c.type)}"
+            if (allRows.any { it.title == title }) title = "$title · ${c.addon.name}"
+            val row = Row(title, items, kind = kind)
+            allRows.add(row)
+            if (page == HOME) {
+                rows.rows.add(row)
+                rows.notifyItemInserted(rows.rows.size - 1)
+                status.visibility = View.GONE
+            } else if (row.kind == ANIME && page == ANIME || page == MOVIES || page == SHOWS) render()
             firstFocus()
         }
-        if (rows.rows.isEmpty()) status.text = "None of your add-ons had a catalog to show"
+        if (allRows.isEmpty()) status.text = "None of your add-ons had a catalog to show"
     }
 
     private suspend fun refreshLibrary() {
@@ -173,18 +283,18 @@ class HomeActivity : AppCompatActivity() {
         placeLibraryRows()
     }
 
-    /** Continue watching and Watchlist go first, and change only when what's in them changed */
+    /** Continue watching and My List go first, and change only when what's in them changed */
     private fun placeLibraryRows() {
         val wanted = listOfNotNull(
             Session.continueWatching(Play.library.values).takeIf { it.isNotEmpty() }?.let { Row(CONTINUE, it, wide = true) },
-            Session.watchlist(Play.library.values).takeIf { it.isNotEmpty() }?.let { Row(WATCHLIST, it) },
+            Session.watchlist(Play.library.values).takeIf { it.isNotEmpty() }?.let { Row(MY_LIST_ROW, it) },
         )
-        val current = rows.rows.filter { it.title == CONTINUE || it.title == WATCHLIST }
+        val current = allRows.filter { it.title == CONTINUE || it.title == MY_LIST_ROW }
         fun sig(list: List<Row>) = list.joinToString("|") { r -> r.title + ":" + r.items.joinToString(",") { "${it.id}/${it.videoId}/${(it.progress * 100).toInt()}" } }
         if (sig(wanted) == sig(current)) return
-        rows.rows.removeAll { it.title == CONTINUE || it.title == WATCHLIST }
-        rows.rows.addAll(0, wanted)
-        rows.notifyDataSetChanged()
+        allRows.removeAll { it.title == CONTINUE || it.title == MY_LIST_ROW }
+        allRows.addAll(0, wanted)
+        render()
         firstFocus()
     }
 
@@ -211,7 +321,7 @@ class HomeActivity : AppCompatActivity() {
         heroMeta.text = listOf(item.year, if (item.type == "series") "Series" else if (item.type == "movie") "Movie" else "", item.subtitle)
             .filter { it.isNotEmpty() }.joinToString("  ·  ")
         heroText.text = item.description
-        updateWatchButton()
+        updateListButton()
         pictureJob?.cancel()
         pictureJob = lifecycleScope.launch {
             delay(220) // not while the remote is racing along a row
@@ -223,29 +333,21 @@ class HomeActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateWatchButton() {
+    /** ＋ My List, or ✓ My List once it's on the list */
+    private fun updateListButton() {
         val on = hero?.let { Play.inWatchlist(it.id) } == true
-        watchButton.setImageResource(if (on) R.drawable.ic_mq_bookmark_added else R.drawable.ic_mq_bookmark)
-        watchButton.contentDescription = if (on) "Remove from watchlist" else "Add to watchlist"
+        setPill(listButton, if (on) R.drawable.ic_mq_check else R.drawable.ic_mq_add, "My List")
+        listButton.contentDescription = if (on) "Remove from My List" else "Add to My List"
     }
 
-    private fun toggleWatchlist() {
+    private fun toggleList() {
         val item = hero ?: return
         val on = !Play.inWatchlist(item.id)
         Play.setWatchlist(item, on) { ok ->
-            if (!ok) { Toast.makeText(this, "Couldn't update your watchlist", Toast.LENGTH_SHORT).show(); return@setWatchlist }
-            updateWatchButton()
-            Toast.makeText(this, if (on) "Added to your watchlist" else "Removed from your watchlist", Toast.LENGTH_SHORT).show()
+            if (!ok) { Toast.makeText(this, "Couldn't update My List", Toast.LENGTH_SHORT).show(); return@setWatchlist }
+            updateListButton()
+            Toast.makeText(this, if (on) "Added to My List" else "Removed from My List", Toast.LENGTH_SHORT).show()
             placeLibraryRows()
-        }
-    }
-
-    private fun trailer() {
-        val item = hero ?: return
-        lifecycleScope.launch {
-            val yt = Session.trailerId(Session.meta(item.type, item.id))
-            if (yt == null) Toast.makeText(this@HomeActivity, "No trailer for this one", Toast.LENGTH_SHORT).show()
-            else Play.trailer(this@HomeActivity, yt)
         }
     }
 
@@ -276,6 +378,13 @@ class HomeActivity : AppCompatActivity() {
 
     companion object {
         const val CONTINUE = "Continue watching"
-        const val WATCHLIST = "Your watchlist"
+        const val MY_LIST_ROW = "My List"
+        const val HOME = "home"
+        const val SHOWS = "shows"
+        const val MOVIES = "movies"
+        const val ANIME = "anime"
+        const val MY_LIST = "mylist"
+        const val RAIL_SHUT = 76
+        const val RAIL_OPEN = 230
     }
 }

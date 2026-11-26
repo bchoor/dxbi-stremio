@@ -93,18 +93,24 @@ class Source(val addon: Addon, val json: JSONObject) {
         resTier * 1e6 + picture * 1e5 + sound * 1e4 + kindScore * 1e3 +
         (sizeBytes / 1e9).coerceAtMost(99.0) - (if (lesser) 5e6 else 0.0)
 
-    /** Short badges for the card, in reading order */
+    /** The picture, for the card's left tile under the resolution */
+    val pictureLabel: String = when {
+        dv7 -> "DV7"
+        dv -> "DV"
+        has("""\bhdr10\+|\bhdr10plus\b""") -> "HDR10+"
+        hdr -> "HDR"
+        else -> ""
+    }
+
+    /** Short badges for the card, in reading order (the resolution and picture are on the tile) */
     fun badges(): List<Pair<String, Badge>> = buildList {
-        when {
-            dv7 -> add("DV7 → HDR10" to Badge.LINE)
-            dv -> add("DOLBY VISION" to Badge.SOLID)
-            hdr -> add("HDR" to Badge.SOLID)
-        }
-        if (audio.isNotEmpty()) add((if (converted) "$audio → DD+" else audio).uppercase() to if (converted) Badge.WARN else Badge.SOLID)
+        if (dv7) add("PLAYS AS HDR10" to Badge.LINE)
+        // sound: ✓ when the soundbar gets it as it is, → DD+ when it's converted
+        if (audio.isNotEmpty()) add(if (converted) "${audio.uppercase()} → DD+" to Badge.WARN else "${audio.uppercase()} ✓" to Badge.GO)
         if (imax) add("IMAX" to Badge.GOLD)
         if (kind == "Remux") add("REMUX" to Badge.LINE) else if (kind == "BluRay") add("BLU-RAY" to Badge.LINE) else if (kind == "WEB") add("WEB" to Badge.LINE)
-        if (instant) add("INSTANT" to Badge.GO)
-        if (pending) add("DOWNLOAD FIRST" to Badge.LINE)
+        if (instant) add("⚡ INSTANT" to Badge.GOLD)
+        if (pending) add("DOWNLOAD FIRST" to Badge.WARN)
     }
 
     val resLabel: String = when { res >= 2160 -> "4K"; res > 0 -> "${res}p"; else -> "?" }
