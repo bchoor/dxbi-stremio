@@ -2562,6 +2562,14 @@
     listStep(focused, e) {
       const [dx, dy] = this.DIRS[e.key];
       const parent = focused.parentElement;
+      // The source filters: Left/Right step along the bar's own buttons (a search of the whole
+      // page for the nearest one took seconds with hundreds of sources below)
+      const filterRow = dx && focused.closest(".dx-sb-row");
+      if (filterRow) {
+        const btns = [...filterRow.querySelectorAll("button")];
+        const at = btns.indexOf(focused);
+        return at < 0 ? undefined : btns[at + dx] || focused;
+      }
       const kind = (n) => (String(n.className).split(" ")[0] || "").replace(/-[A-Za-z0-9_]{5}$/, "");
       const k = kind(focused);
       if (!parent || !k) return undefined;
