@@ -127,11 +127,11 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         override fun buildAudioSink(context: android.content.Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink =
-            DefaultAudioSink.Builder(context)
+            TvAudioSink(DefaultAudioSink.Builder(context)
                 .setEnableFloatOutput(false) // (Dialogue boost works on 16-bit sound)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                 .setAudioProcessors(arrayOf(sound))
-                .build()
+                .build())
     }
 
     private val phone get() = (getSystemService(UI_MODE_SERVICE) as android.app.UiModeManager).currentModeType != Configuration.UI_MODE_TYPE_TELEVISION &&
@@ -359,7 +359,8 @@ class PlayerActivity : AppCompatActivity() {
             override fun onTracksChanged(tracks: Tracks) {
                 if (!audioRestored && tracks.groups.any { it.type == C.TRACK_TYPE_AUDIO }) {
                     audioRestored = true
-                    AudioMemory.restore(this@PlayerActivity, sourceKey, exo, tracks)
+                    if (AudioMemory.has(this@PlayerActivity, sourceKey)) AudioMemory.restore(this@PlayerActivity, sourceKey, exo, tracks)
+                    else AudioMemory.preferDolby(exo, tracks)
                 }
                 val text = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }.flatMap { g -> (0 until g.length).filter { g.isTrackSelected(it) }.map { i -> g.getTrackFormat(i).id } }
                 if (text.isNotEmpty() && text != lastText) exo.seekTo(exo.currentPosition)

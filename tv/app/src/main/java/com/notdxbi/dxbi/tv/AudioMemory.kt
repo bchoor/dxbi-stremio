@@ -37,6 +37,39 @@ object AudioMemory {
         edit.apply()
     }
 
+    /** Whether a track was picked by hand for this video before */
+    fun has(context: Context, key: String) = key.isNotEmpty() && context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).contains(key)
+
+    /**
+     * A file whose first sound is DTS or TrueHD often carries the same sound in Dolby too (5.1 or
+     * more, same language, not commentary): that one goes to a soundbar as it is, so it's chosen
+     */
+    fun preferDolby(exo: ExoPlayer, tracks: Tracks) {
+        val chosen = tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_AUDIO && it.isSelected } ?: return
+        val now = (0 until chosen.length).firstOrNull { chosen.isTrackSelected(it) }?.let { chosen.getTrackFormat(it) } ?: return
+        val heavy = now.sampleMimeType.orEmpty().let { it.contains("dts") || it == androidx.media3.common.MimeTypes.AUDIO_TRUEHD }
+        if (!heavy) return
+        val dolby = setOf(androidx.media3.common.MimeTypes.AUDIO_E_AC3_JOC, androidx.media3.common.MimeTypes.AUDIO_E_AC3, androidx.media3.common.MimeTypes.AUDIO_AC3)
+        var best: Pair<Tracks.Group, Int>? = null
+        var bestScore = -1
+        for (group in tracks.groups) {
+            if (group.type != C.TRACK_TYPE_AUDIO) continue
+            for (i in 0 until group.length) {
+                if (!group.isTrackSupported(i)) continue
+                val f = group.getTrackFormat(i)
+                if (f.sampleMimeType !in dolby || f.channelCount < 6) continue
+                if (now.language != null && f.language != null && f.language != now.language) continue
+                if ((f.roleFlags and C.ROLE_FLAG_COMMENTARY) != 0 || f.label.orEmpty().contains("comment", true)) continue
+                val score = when (f.sampleMimeType) { androidx.media3.common.MimeTypes.AUDIO_E_AC3_JOC -> 3; androidx.media3.common.MimeTypes.AUDIO_E_AC3 -> 2; else -> 1 } * 10 + f.channelCount
+                if (score > bestScore) { bestScore = score; best = group to i }
+            }
+        }
+        val (group, index) = best ?: return
+        exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index))
+            .build()
+    }
+
     fun restore(context: Context, key: String, exo: ExoPlayer, tracks: Tracks) {
         if (key.isEmpty()) return
         val saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(key, null) ?: return
