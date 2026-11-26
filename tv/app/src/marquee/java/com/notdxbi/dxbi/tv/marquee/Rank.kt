@@ -108,7 +108,7 @@ class Source(val addon: Addon, val json: JSONObject) {
 
     /** The picture, for the card's left tile under the resolution */
     val pictureLabel: String = when {
-        dv7 -> "DV7"
+        dv7 -> "HDR10"
         dv -> "DV"
         has("""\bhdr10\+|\bhdr10plus\b""") -> "HDR10+"
         hdr -> "HDR"
@@ -119,7 +119,7 @@ class Source(val addon: Addon, val json: JSONObject) {
     fun badges(): List<Pair<String, Badge>> = buildList {
         if (edition.isNotEmpty()) add(edition to Badge.SOLID)
         if (remastered) add("REMASTERED" to Badge.LINE)
-        if (dv7) add("PLAYS AS HDR10" to Badge.LINE)
+        if (dv7) add("DOLBY VISION DISC · PLAYS AS HDR10" to Badge.LINE)
         // sound: ✓ when the soundbar gets it as it is, → DD+ when it's converted
         if (audio.isNotEmpty()) add(if (converted) "${audio.uppercase()} → DD+ 5.1" to Badge.WARN else "${audio.uppercase()} ✓" to Badge.GO)
         if (imax) add("IMAX" to Badge.GOLD)
