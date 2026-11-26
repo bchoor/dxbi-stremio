@@ -8,6 +8,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Bundle
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -56,6 +57,15 @@ class HomeActivity : AppCompatActivity() {
     private var focusedOnce = false
     private var railOpen = false
     private var splash: Splash? = null
+    private lateinit var heroButtons: LinearLayout
+    private lateinit var heroPlay: View
+    /** Where the remote was on the page before it went into the menu */
+    private var lastContent: View? = null
+    private val prefs by lazy { getSharedPreferences("marquee", MODE_PRIVATE) }
+    /** Anime rows and the Anime page; off unless turned on in Settings */
+    private var showAnime: Boolean
+        get() = prefs.getBoolean("anime", false)
+        set(v) { prefs.edit().putBoolean("anime", v).apply() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,7 +115,11 @@ class HomeActivity : AppCompatActivity() {
         root.addView(exitNote, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(56) })
         setContentView(root)
 
-        root.viewTreeObserver.addOnGlobalFocusChangeListener { _, now -> openRail(now != null && inside(rail, now)) }
+        root.viewTreeObserver.addOnGlobalFocusChangeListener { _, now ->
+            val inRail = now != null && inside(rail, now)
+            if (now != null && !inRail) lastContent = now
+            openRail(inRail)
+        }
         // Back: first to the menu (as Netflix does), then out of the app
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -166,6 +180,7 @@ class HomeActivity : AppCompatActivity() {
         add(ANIME, R.drawable.ic_mq_anime, "Anime") { showPage(ANIME) }
         add(MY_LIST, R.drawable.ic_mq_add, "My List") { showPage(MY_LIST) }
         add("settings", R.drawable.ic_mq_settings, "Settings") { settings() }
+        railItems.first { it.first == ANIME }.second.visibility = if (showAnime) View.VISIBLE else View.GONE
         paintRail()
     }
 
@@ -210,7 +225,7 @@ class HomeActivity : AppCompatActivity() {
     /** Fills the rows for the chosen page */
     private fun render() {
         val shown = when (page) {
-            HOME -> allRows.toList()
+            HOME -> allRows.filter { showAnime || it.kind != ANIME }
             MY_LIST -> allRows.filter { it.title == MY_LIST_ROW }
             ANIME -> allRows.filter { it.kind == ANIME }
             else -> {
@@ -239,8 +254,10 @@ class HomeActivity : AppCompatActivity() {
         addView(heroText, LinearLayout.LayoutParams(dp(440), LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
 
         val buttons = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; clipChildren = false }
+        heroButtons = buttons
         val gap = { LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) } }
-        buttons.addView(pillButton(R.drawable.ic_mq_play, "Play", primary = true).apply { setOnClickListener { hero?.let { Session.open(this@HomeActivity, it, autoplay = true) } } }, gap())
+        heroPlay = pillButton(R.drawable.ic_mq_play, "Play", primary = true).apply { setOnClickListener { hero?.let { Session.open(this@HomeActivity, it, autoplay = true) } } }
+        buttons.addView(heroPlay, gap())
         buttons.addView(pillButton(R.drawable.ic_mq_info, "More info").apply { setOnClickListener { hero?.let { Session.open(this@HomeActivity, it) } } }, gap())
         listButton = pillButton(R.drawable.ic_mq_add, "My List").apply { setOnClickListener { toggleList() } }
         buttons.addView(listButton, gap())
@@ -295,7 +312,7 @@ class HomeActivity : AppCompatActivity() {
             if (allRows.any { it.title == title }) title = "$title · ${c.addon.name}"
             val row = Row(title, items, kind = kind)
             allRows.add(row)
-            if (page == HOME) {
+            if (page == HOME && (showAnime || row.kind != ANIME)) {
                 rows.rows.add(row)
                 rows.notifyItemInserted(rows.rows.size - 1)
                 status.visibility = View.GONE
@@ -334,14 +351,95 @@ class HomeActivity : AppCompatActivity() {
         rowsView.postDelayed({ focusRow(0) }, 150)
     }
 
-    private fun focusRow(index: Int) {
-        if (index !in rows.rows.indices) return
-        rowsView.scrollToPosition(index)
-        rowsView.postDelayed({
-            val box = rowsView.layoutManager?.findViewByPosition(index) as? ViewGroup ?: return@postDelayed
-            val list = (0 until box.childCount).map { box.getChildAt(it) }.firstOrNull { it is RecyclerView } as? RecyclerView
-            list?.getChildAt(0)?.requestFocus()
-        }, 120)
+    private fun focusRow(index: Int) = focusCard(index, 0)
+
+    private fun rowList(box: View?): RecyclerView? =
+        (box as? ViewGroup)?.let { b -> (0 until b.childCount).map { b.getChildAt(it) }.firstOrNull { it is RecyclerView } as? RecyclerView }
+
+    /** Puts the remote on poster [col] of row [row] (or the row's last one), with that row at the top */
+    private fun focusCard(row: Int, col: Int) {
+        if (row !in rows.rows.indices) return
+        val target = col.coerceIn(0, (rows.rows[row].items.size - 1).coerceAtLeast(0))
+        fun inRow(list: RecyclerView): Boolean {
+            val v = list.findViewHolderForAdapterPosition(target)?.itemView ?: return false
+            return v.requestFocus()
+        }
+        val box = rowsView.layoutManager?.findViewByPosition(row)
+        val list = rowList(box)
+        if (list != null && box!!.top == rowsView.paddingTop && inRow(list)) return
+        (rowsView.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(row, 0)
+        rowsView.post {
+            val l = rowList(rowsView.layoutManager?.findViewByPosition(row)) ?: return@post
+            if (inRow(l)) return@post
+            l.scrollToPosition(target)
+            l.post { if (!inRow(l)) l.getChildAt(0)?.requestFocus() }
+        }
+    }
+
+    private fun railItemForPage(): View? =
+        railItems.firstOrNull { it.first == page && it.second.visibility == View.VISIBLE }?.second ?: railItems.firstOrNull { it.first == HOME }?.second
+
+    private fun backToContent() {
+        val last = lastContent
+        if (last != null && last.isAttachedToWindow && last.isShown && last.requestFocus()) return
+        if (rows.rows.isNotEmpty()) focusRow(0) else heroPlay.requestFocus()
+    }
+
+    /**
+     * The remote moves one step at a time, always where you'd expect: along a row, to the same spot in
+     * the row above or below, up from the first row to the big picture's buttons, and into the menu only
+     * with Left from a row's first poster (or the first button). It never slips past an edge.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event)
+        val f = currentFocus ?: return super.dispatchKeyEvent(event)
+        val code = event.keyCode
+        if (code != KeyEvent.KEYCODE_DPAD_UP && code != KeyEvent.KEYCODE_DPAD_DOWN && code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT)
+            return super.dispatchKeyEvent(event)
+        if (inside(rail, f)) {
+            val shown = railItems.map { it.second }.filter { it.visibility == View.VISIBLE }
+            val i = shown.indexOfFirst { inside(it, f) }
+            when (code) {
+                KeyEvent.KEYCODE_DPAD_UP -> if (i > 0) shown[i - 1].requestFocus()
+                KeyEvent.KEYCODE_DPAD_DOWN -> if (i in 0 until shown.size - 1) shown[i + 1].requestFocus()
+                KeyEvent.KEYCODE_DPAD_RIGHT -> backToContent()
+            }
+            return true
+        }
+        if (inside(heroButtons, f)) {
+            val buttons = (0 until heroButtons.childCount).map { heroButtons.getChildAt(it) }.filter { it.isShown }
+            val i = buttons.indexOfFirst { inside(it, f) }
+            when (code) {
+                KeyEvent.KEYCODE_DPAD_UP -> {}
+                KeyEvent.KEYCODE_DPAD_DOWN -> focusRow(0)
+                KeyEvent.KEYCODE_DPAD_LEFT -> if (i > 0) buttons[i - 1].requestFocus() else railItemForPage()?.requestFocus()
+                KeyEvent.KEYCODE_DPAD_RIGHT -> if (i in 0 until buttons.size - 1) buttons[i + 1].requestFocus()
+            }
+            return true
+        }
+        if (inside(rowsView, f)) {
+            val box = rowsView.findContainingItemView(f) ?: return super.dispatchKeyEvent(event)
+            val r = rowsView.getChildAdapterPosition(box)
+            val list = rowList(box) ?: return super.dispatchKeyEvent(event)
+            val card = list.findContainingItemView(f) ?: return super.dispatchKeyEvent(event)
+            val c = list.getChildAdapterPosition(card)
+            if (r == RecyclerView.NO_POSITION || c == RecyclerView.NO_POSITION) return true
+            val count = list.adapter?.itemCount ?: 0
+            when (code) {
+                KeyEvent.KEYCODE_DPAD_UP -> if (r == 0) heroPlay.requestFocus() else focusCard(r - 1, c)
+                KeyEvent.KEYCODE_DPAD_DOWN -> if (r < rows.rows.size - 1) focusCard(r + 1, c)
+                KeyEvent.KEYCODE_DPAD_LEFT -> if (c == 0) railItemForPage()?.requestFocus() else {
+                    val prev = list.findViewHolderForAdapterPosition(c - 1)?.itemView
+                    if (prev == null || !prev.requestFocus()) { list.scrollToPosition(c - 1); list.post { list.findViewHolderForAdapterPosition(c - 1)?.itemView?.requestFocus() } }
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> if (c < count - 1) {
+                    val next = list.findViewHolderForAdapterPosition(c + 1)?.itemView
+                    if (next == null || !next.requestFocus()) { list.scrollToPosition(c + 1); list.post { list.findViewHolderForAdapterPosition(c + 1)?.itemView?.requestFocus() } }
+                }
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     /** The hero follows the remote: title, words and picture of whatever is focused */
@@ -391,6 +489,11 @@ class HomeActivity : AppCompatActivity() {
                 Play.library.clear()
                 Session.addons = emptyList()
                 signIn()
+            }
+            .setNeutralButton(if (showAnime) "Hide Anime" else "Show Anime") { _, _ ->
+                showAnime = !showAnime
+                railItems.first { it.first == ANIME }.second.visibility = if (showAnime) View.VISIBLE else View.GONE
+                if (page == ANIME || page == HOME) showPage(HOME) else render()
             }
             .setNegativeButton("Close", null)
             .show()
