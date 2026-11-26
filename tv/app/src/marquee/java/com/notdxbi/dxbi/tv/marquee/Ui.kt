@@ -57,6 +57,9 @@ fun Context.badge(text: String, kind: Badge) = label(text, 10f, bold = true).app
         Badge.WARN -> Triple(Ui.WARN, Ui.WARN_BG, 0)
         Badge.GOLD -> Triple(Ui.ACCENT, Color.TRANSPARENT, Ui.ACCENT)
         Badge.GO -> Triple(Ui.GO, Ui.GO_BG, 0)
+        Badge.EXTENDED -> Triple(0xFF1A1030.toInt(), 0xFFC79BFF.toInt(), 0)
+        Badge.THEATRICAL -> Triple(0xFF0B2622.toInt(), 0xFF5FD6C8.toInt(), 0)
+        Badge.CUT -> Triple(Ui.BG, 0xFFF5C46A.toInt(), 0)
     }
     setTextColor(fg)
     background = round(bg, 4, this@badge, if (line != 0) 1 else 0, line)

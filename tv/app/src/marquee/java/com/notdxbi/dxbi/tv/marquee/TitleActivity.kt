@@ -482,7 +482,7 @@ class TitleActivity : AppCompatActivity() {
             }
         }
         adapter.notifyDataSetChanged()
-        sources.firstOrNull()?.let { best -> setPill(playButton, null, playWord(), (listOf(best.resLabel, best.pictureLabel, best.audio).filter { it.isNotEmpty() }).joinToString(" · ")) }
+        sources.firstOrNull()?.let { best -> setPill(playButton, null, playWord(), (listOf(best.resLabel, best.pictureLabel, best.audio).filter { it.isNotEmpty() && it != "SDR" }).joinToString(" · ")) }
     }
 
     private fun resumeMs(): Long {
@@ -518,9 +518,10 @@ class TitleActivity : AppCompatActivity() {
 
 /**
  * The sources list, one card each:
- *   [ 4K ]  DD+ ATMOS ✓  WEB  ⚡ INSTANT        19.4 GB
- *   [ DV ]  Dune.Part.Two.2024.2160p.WEB-DL…
- *           Torrentio · RD+   (another player: from the player's own controls)
+ *   [  4K  ]  ⚡ INSTANT  EXTENDED  WEB      19.4 GB
+ *   [  DV  ]  Dune.Part.Two.2024.2160p.WEB-DL…
+ *   [ DD+  ]  Torrentio · RD+
+ *   [Atmos ]
  */
 class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapter<SourcesAdapter.Holder>() {
     var items: List<Source> = emptyList()
@@ -552,8 +553,8 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
         }
         // a strip in the provider's colour (Torrentio blue, Easynews green)
         val stripe = View(ctx)
-        main.addView(stripe, LinearLayout.LayoutParams(ctx.dp(4), ctx.dp(52)).apply { marginEnd = ctx.dp(8) })
-        // the tile: resolution, and the picture under it
+        main.addView(stripe, LinearLayout.LayoutParams(ctx.dp(4), LinearLayout.LayoutParams.MATCH_PARENT).apply { marginEnd = ctx.dp(8) })
+        // the tile: resolution, the picture under it, then the sound
         val tile = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -562,8 +563,12 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
         }
         val res = ctx.label("", 15f, bold = true).apply { gravity = Gravity.CENTER }
         val pic = ctx.label("", 10f, Ui.ACCENT, bold = true).apply { gravity = Gravity.CENTER }
-        tile.addView(res); tile.addView(pic)
-        main.addView(tile, LinearLayout.LayoutParams(ctx.dp(52), ctx.dp(52)).apply { marginEnd = ctx.dp(10) })
+        val snd = ctx.label("", 10f, Ui.TEXT, bold = true).apply { gravity = Gravity.CENTER; tag = "snd" }
+        val atmos = ctx.label("Atmos", 9f, Ui.MUTED, bold = true).apply { gravity = Gravity.CENTER; tag = "atmos" }
+        tile.addView(res); tile.addView(pic); tile.addView(snd); tile.addView(atmos)
+        tile.minimumHeight = ctx.dp(64)
+        main.addView(tile, LinearLayout.LayoutParams(ctx.dp(68), LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(10) })
+        main.tag = tile
 
         val words = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val top = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -594,8 +599,10 @@ class SourcesAdapter(private val onPlay: (Source) -> Unit) : RecyclerView.Adapte
         val ctx = holder.itemView.context
         holder.res.text = s.resLabel
         holder.pic.text = s.pictureLabel
-        holder.pic.visibility = if (s.pictureLabel.isEmpty()) View.GONE else View.VISIBLE
-        holder.pic.setTextColor(if (s.dv && !s.dv7) Ui.ACCENT else Ui.TEXT)
+        holder.pic.setTextColor(if (s.dv && !s.dv7) Ui.ACCENT else if (s.hdr) 0xFF5AA9FF.toInt() else Ui.MUTED)
+        val tile = holder.main.tag as View
+        tile.findViewWithTag<TextView>("snd").apply { text = s.soundLabel; visibility = if (s.soundLabel.isEmpty()) View.GONE else View.VISIBLE }
+        tile.findViewWithTag<TextView>("atmos").visibility = if (s.atmos) View.VISIBLE else View.GONE
         holder.badges.removeAllViews()
         for ((text, kind) in s.badges()) holder.badges.addView(ctx.badge(text, kind), LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(4) })
         holder.size.text = s.size

@@ -112,21 +112,27 @@ class Source(val addon: Addon, val json: JSONObject) {
         dv -> "DV"
         has("""\bhdr10\+|\bhdr10plus\b""") -> "HDR10+"
         hdr -> "HDR"
-        else -> ""
+        else -> "SDR"
     }
 
-    /** Short badges for the card, in reading order (the resolution and picture are on the tile) */
+    /** The flags on the card's top line, in reading order (resolution, picture and sound are on the tile) */
     fun badges(): List<Pair<String, Badge>> = buildList {
-        if (edition.isNotEmpty()) add(edition to Badge.SOLID)
+        if (instant) add("⚡ INSTANT" to Badge.GO)
+        if (pending) add("DOWNLOAD FIRST" to Badge.WARN)
+        if (edition.isNotEmpty()) add(edition to when (edition) {
+            "EXTENDED" -> Badge.EXTENDED
+            "THEATRICAL" -> Badge.THEATRICAL
+            "DIRECTOR'S CUT", "FINAL CUT" -> Badge.CUT
+            else -> Badge.LINE
+        })
         if (remastered) add("REMASTERED" to Badge.LINE)
-        if (dv7) add("DOLBY VISION DISC · PLAYS AS HDR10" to Badge.LINE)
-        // sound: ✓ when the soundbar gets it as it is, → DD+ when it's converted
-        if (audio.isNotEmpty()) add(if (converted) "${audio.uppercase()} → DD 5.1" to Badge.WARN else "${audio.uppercase()} ✓" to Badge.GO)
         if (imax) add("IMAX" to Badge.GOLD)
         if (kind == "Remux") add("REMUX" to Badge.LINE) else if (kind == "BluRay") add("BLU-RAY" to Badge.LINE) else if (kind == "WEB") add("WEB" to Badge.LINE)
-        if (instant) add("⚡ INSTANT" to Badge.GOLD)
-        if (pending) add("DOWNLOAD FIRST" to Badge.WARN)
     }
+
+    /** The sound, for the tile under the picture: the codec, and Atmos on its own line */
+    val soundLabel: String = audio.removeSuffix(" Atmos").ifEmpty { "" }
+    val atmos: Boolean = audio.endsWith("Atmos")
 
     val resLabel: String = when { res >= 2160 -> "4K"; res > 0 -> "${res}p"; else -> "?" }
 
@@ -163,4 +169,4 @@ class Source(val addon: Addon, val json: JSONObject) {
     val headers: JSONObject? = json.optJSONObject("behaviorHints")?.optJSONObject("proxyHeaders")?.optJSONObject("request")
 }
 
-enum class Badge { SOLID, LINE, WARN, GOLD, GO }
+enum class Badge { SOLID, LINE, WARN, GOLD, GO, EXTENDED, THEATRICAL, CUT }
