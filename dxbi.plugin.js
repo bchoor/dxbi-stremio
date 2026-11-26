@@ -1,7 +1,7 @@
 /**
  * @name dx.bi
  * @description Netflix-style Stremio: billboard, carousels and hover previews, reviews and ratings, skip intro and up next, a better player, watch parties and more. The dx.bi look is built in.
- * @version 2.38.4
+ * @version 2.38.5
  * @author dx.bi
  * @updateUrl https://raw.githubusercontent.com/notdxbi/dxbi-stremio/main/dxbi.plugin.js
  */
@@ -138,6 +138,8 @@
     quickPlayQuality: "best",
     quickPlayFallback: "best",
     streamRows: true,
+    streamPicture: "hdr",
+    streamSound: "any",
     watchedTitles: "show",
     librarySort: true,
     convertVideo: "auto",
@@ -208,6 +210,8 @@
     { key: "quickPlayMemory", type: "select", label: "Remember my stream choice", defaultValue: DEFAULTS.quickPlayMemory, options: [{ label: "For each series", value: "series" }, { label: "Everywhere", value: "global" }] },
     { key: "quickPlayQuality", type: "select", label: "Highest quality to pick", defaultValue: DEFAULTS.quickPlayQuality, options: [{ label: "Best available", value: "best" }, { label: "4K", value: "2160" }, { label: "1080p", value: "1080" }, { label: "720p", value: "720" }] },
     { key: "quickPlayFallback", type: "select", label: "If my usual stream is missing", defaultValue: DEFAULTS.quickPlayFallback, options: [{ label: "Play the next best", value: "best" }, { label: "Show me the list", value: "ask" }] },
+    { key: "streamPicture", type: "select", label: "Best match: picture", description: "Which comes first when dx.bi picks or ranks a stream. Dolby Vision needs a TV or player that decodes it.", defaultValue: DEFAULTS.streamPicture, options: [{ label: "HDR first (safest)", value: "hdr" }, { label: "Dolby Vision first", value: "dv" }] },
+    { key: "streamSound", type: "select", label: "Best match: sound", description: "Ranks streams by their sound within the same picture quality. Nothing is hidden: DTS still shows, just lower.", defaultValue: DEFAULTS.streamSound, options: [{ label: "Any sound", value: "any" }, { label: "Dolby first, DTS last (soundbars on ARC)", value: "dolby" }] },
     { key: "streamRows", type: "toggle", label: "Clean stream list", description: "Shows each stream as a simple row: quality, source, size and whether it's ready to play.", defaultValue: DEFAULTS.streamRows },
     { key: "builtInTheme", type: "toggle", label: "dx.bi look built in", description: `Use the dx.bi theme without installing it separately. Steps aside by itself when you apply another theme in Settings → ${SETTINGS_SECTION} → Themes.`, defaultValue: DEFAULTS.builtInTheme },
     { key: "videoRowsOnly", type: "toggle", label: "Only movie, series & anime rows on Home", description: "Hides rows from addons that list other things, like a debrid account's downloads or YouTube channels. They stay in Discover.", defaultValue: DEFAULTS.videoRowsOnly },
@@ -444,7 +448,7 @@
     ["Look", ["liteMode", "accent", "posterAccent", "focusColour", "builtInTheme", "crispPosters", "ratings", "animeTitles", "wideContinue"]],
     ["Home", ["myList", "forYou", "videoRowsOnly", "billboard", "billboardSource", "billboardInterval", "newEpisodes", "airingRow", "whoIsWatching"]],
     ["Hover cards & trailers", ["previews", "trailers", "trailerDelay"]],
-    ["Browsing & library", ["watchedTitles", "librarySort", "streamRows", "streamTools", "addonTools", "watchStats", "reviews", "tmdbKey", "mdblistKey", "profileSync"]],
+    ["Browsing & library", ["watchedTitles", "librarySort", "streamPicture", "streamSound", "streamRows", "streamTools", "addonTools", "watchStats", "reviews", "tmdbKey", "mdblistKey", "profileSync"]],
     ["Player", ["quickPlay", "quickPlayMemory", "quickPlayQuality", "quickPlayFallback", "tvTorrents", "playerExtras", "remainingTime", "playerClock", "seekPreviews", "enhance", "pictureSound", "streamStats", "rememberPlayback", "playerKeys", "pip", "externalPlayer", "convertVideo"]],
     ["Subtitles", ["subtitleStyle", "subtitleFont", "subtitleCustomFont", "subtitlesStart", "hdrSubtitles"]],
     ["Episodes & skipping", ["skipButtons", "autoSkip", "upNext", "preloadNext", "fillerGuide", "skipFiller"]],
@@ -2561,9 +2565,17 @@
       const kind = (n) => (String(n.className).split(" ")[0] || "").replace(/-[A-Za-z0-9_]{5}$/, "");
       const k = kind(focused);
       if (!parent || !k) return undefined;
-      const items = [...parent.children].filter((n) => n.checkVisibility());
+      // in the order they're shown: a sorted list (streamTools.apply) moves rows with CSS order only,
+      // so the DOM order isn't what's on screen and stepping by it skipped rows
+      // (a sorted stream list runs across the addon groups as one list: step through all its rows)
+      const streamList = focused.matches(dpage.ITEM) && focused.closest(".dx-sorted");
+      const items = (streamList ? dpage.streamItems(streamList) : [...parent.children])
+        .filter((n) => n.checkVisibility())
+        .map((n, idx) => [n, idx, Number(n.style.order) || 0])
+        .sort((x, y) => x[2] - y[2] || x[1] - y[1])
+        .map((x) => x[0]);
       const i = items.indexOf(focused);
-      if (items.length < 2 || i < 0 || items.some((n) => kind(n) !== k)) return undefined;
+      if (items.length < 2 || i < 0 || (!streamList && items.some((n) => kind(n) !== k))) return undefined;
       const a = focused.getBoundingClientRect();
       const b = items[i + 1 < items.length ? i + 1 : i - 1].getBoundingClientRect();
       const vertical = Math.abs(b.left - a.left) < 4 && Math.abs(b.top - a.top) >= a.height / 2;
@@ -4131,7 +4143,19 @@
     const site = (/(?:⚙\uFE0F?|🔎)\s*([^\s\n]+)/u.exec(all) || [])[1] || "";
     const codec = /\b(?:x265|h\.?265|hevc)\b/i.test(all) ? "HEVC" : /\bav1\b/i.test(all) ? "AV1" : /\b(?:x264|h\.?264|avc)\b/i.test(all) ? "H.264" : "";
 
-    return { provider, site, codec, instant, pending, lesser, res, hdr, dv, size, seeds, source, langs: [...langs] };
+    const atmos = /\batmos\b/i.test(all);
+    let audio = "";
+    if (/\btrue[ .-]?hd\b/i.test(all)) audio = "TrueHD";
+    else if (/\b(?:ddp|dd\+|e-?ac-?3|dolby[ .-]?digital[ .-]?plus)/i.test(all)) audio = "DD+";
+    else if (/\bdts[ .-]?(?:hd|ma|x)\b|\bdts-hd/i.test(all)) audio = "DTS-HD";
+    else if (/\bdts\b/i.test(all)) audio = "DTS";
+    else if (/\b(?:dd|ac-?3|dolby[ .-]?digital)[ .]?(?:[257]\.[01])?\b/i.test(all)) audio = "DD";
+    else if (/\bflac\b/i.test(all)) audio = "FLAC";
+    else if (/\b(?:aac|opus)\b/i.test(all)) audio = "AAC";
+    else if (atmos) audio = "DD+";
+    if (atmos && audio) audio += " Atmos";
+
+    return { provider, site, codec, audio, instant, pending, lesser, res, hdr, dv, size, seeds, source, langs: [...langs] };
   }
 
   // ---------------------------------------------------------------------------
@@ -4246,7 +4270,18 @@
     // Ready-to-play first. HDR beats Dolby Vision, which stalls on some decoders, and an encode
     // beats a huge remux: the pick has to start and keep playing.
     rank(d) {
-      return (d.instant ? 1e5 : 0) + d.res * 10 + (d.dv ? 1 : d.hdr ? 2 : 0) + (this.SOURCE[d.source] || 0) - (d.lesser ? 15000 : 0);
+      return (d.instant ? 1e5 : 0) + d.res * 10 + this.picture(d) + (this.SOURCE[d.source] || 0) + this.sound(d) - (d.lesser ? 15000 : 0);
+    },
+    // (settings may not be loaded where this runs on its own, as in tools/quick-play-test.mjs)
+    picture(d) {
+      const dvFirst = typeof settings !== "undefined" && settings.streamPicture === "dv";
+      return d.dv ? (dvFirst ? 3 : 1) : d.hdr ? 2 : 0;
+    },
+    // under 1, so sound only orders streams that are otherwise alike
+    SOUND: { "DD+ Atmos": 0.9, "TrueHD Atmos": 0.7, "DD+": 0.8, DD: 0.6, TrueHD: 0.5, FLAC: 0.4, AAC: 0.3, "": 0.2, "DTS-HD": 0.1, DTS: 0.1, "DTS-HD Atmos": 0.1, "DTS Atmos": 0.1 },
+    sound(d) {
+      if (typeof settings === "undefined" || settings.streamSound !== "dolby") return 0;
+      return this.SOUND[d.audio || ""] ?? 0.2;
     },
 
     best(list) {
@@ -4392,7 +4427,7 @@
     },
 
     score(d) {
-      return d.res * 10 + (d.dv ? 3 : d.hdr ? 2 : 0) + (SOURCE_RANK[d.source] || 0);
+      return d.res * 10 + (d.dv ? 3 : d.hdr ? 2 : 0) + (SOURCE_RANK[d.source] || 0) + streamChoice.sound(d);
     },
 
     apply(list, rows, bar) {
@@ -7794,9 +7829,15 @@
     }
   }
 
+  const STREAMS_AREA = 'section[class*="streams-"], [class*="streams-list-container"]';
   const mo = new MutationObserver((records) => {
+    // Stremio changed something in the streams panel: its rows need a fresh look
+    if (!streamRows.dirty && records.some((r) => !ownNodesOnly(r) && r.target.nodeType === 1 && r.target.closest(STREAMS_AREA))) streamRows.dirty = true;
     for (const r of records) {
       // Ignore changes we made ourselves
+      // …and dx.bi's own rows going into or out of a stream (each one re-ran a full pass over every
+      // stream, so a long list kept re-checking itself while it filled)
+      if (ownNodesOnly(r)) continue;
       if (r.target.closest && r.target.closest(".dx-hero, .dx-preview, .dx-row-pages, .dxe-airing, .dxe-upnext, .dxe-playhelp, .dxe-placeholder, .dxe-skip, .dxe-trailer, .dx-wide-art, .dx-player-title, .dx-player-flash, .dx-streambar, .dx-stream-empty, .dx-scrub, .dx-enhance-subs, .dx-player-toast, .dxp-nav-btn, .dxp-player-btn, .dxt-panel, .dx-sub2, .dxl-tools, .dxe-theatre, .dx-scores, .dx-reviews-btn, .dx-hide-btn, .dxe-kids-block, .dxe-toast, .dx-ends, .dx-cal-item, .dxe-report, .dxl-empty, .dxw-settings")) continue;
       scheduleSync();
       // Library's watched filters hide titles in the same frame Stremio draws them (a whole sync
@@ -7825,6 +7866,13 @@
       sync();
     });
   }
+  const isOwn = (n) => n.nodeType === 1 && typeof n.className === "string" && /(^|\s)dx/.test(n.className);
+  const ownNodesOnly = (r) => {
+    if (r.type !== "childList") return false;
+    if (r.target.nodeType === 1 && r.target.closest && r.target.closest(".dxv-row")) return true;
+    const nodes = [...r.addedNodes, ...r.removedNodes];
+    return nodes.length > 0 && nodes.every(isOwn);
+  };
   const pageAdded = (r) => {
     for (const n of r.addedNodes) {
       if (n.nodeType === 1 && n.childElementCount && n.getElementsByTagName("*").length > 40 && !(n.className && /(^|\s)dx/.test(n.className))) return true;
@@ -15104,7 +15152,7 @@
       const facts = [d.provider, d.site, seeds, this.size(d.size), ...d.langs.filter((l) => l !== NOT_LISTED).slice(0, 2)].filter(Boolean);
       const state = d.instant ? ["is-ready", "Ready"] : d.pending ? ["is-wait", "Download"] : null;
       return `<span class="dxv-q"><b>${esc(QUALITY_LABEL[d.res])}</b>${d.dv || d.hdr ? `<i>${d.dv ? "Dolby Vision" : "HDR"}</i>` : ""}</span>
-        <span class="dxv-main"><em class="dxv-best">Best match</em><span class="dxv-top"><strong>${esc([this.SOURCES[d.source], d.codec].filter(Boolean).join(" · "))}</strong>${state ? `<span class="dxv-state ${state[0]}">${esc(state[1])}</span>` : ""}</span><small>${esc(facts.join(" · "))}</small>${file ? `<u>${esc(file)}</u>` : ""}</span>`;
+        <span class="dxv-main"><em class="dxv-best">Best match</em><span class="dxv-top"><strong>${esc([this.SOURCES[d.source], d.codec, d.audio].filter(Boolean).join(" · "))}</strong>${state ? `<span class="dxv-state ${state[0]}">${esc(state[1])}</span>` : ""}</span><small>${esc(facts.join(" · "))}</small>${file ? `<u>${esc(file)}</u>` : ""}</span>`;
     },
 
     waiting: () => settings.streamRows && dpage.streamItems().some((el) => !el.hasAttribute("data-dxv")),
@@ -15115,6 +15163,12 @@
       if (root.hasAttribute("data-dx-rows") !== !!settings.streamRows) root.toggleAttribute("data-dx-rows", !!settings.streamRows);
       const list = dpage.streamList();
       if (!list) return;
+      // Nothing in the list changed since the last pass (Stremio's own changes to it mark it dirty,
+      // see the page observer): skip re-reading every row, which on a slow TV took most of each pass
+      if (this.lastList === list && !this.dirty && this.lastOn === !!settings.streamRows) return;
+      this.dirty = false;
+      this.lastList = list;
+      this.lastOn = !!settings.streamRows;
       let best = null;
       let bestRank = -1;
       for (const el of dpage.streamItems(list)) {
@@ -16799,6 +16853,8 @@
         btn.setAttribute("aria-label", "Download this stream");
         btn.innerHTML = DL_ICONS.down;
         a.append(btn);
+        // (a class, not :has(): the browser re-checked :has() on every row at every change)
+        a.classList.add("dx-has-dl");
       }
     },
 
@@ -17089,8 +17145,8 @@
   .dxd-ic { position: relative; width: 1.7rem; height: 1.7rem; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; }
   .dxd-ic svg { width: 1.2rem; height: 1.2rem; }
   .dxd-stream { position: absolute; top: 50%; right: .8rem; z-index: 3; width: 2.4rem; height: 2.4rem; margin-top: -1.2rem; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: rgba(255,255,255,.08); color: #fff; cursor: pointer; opacity: 0; transition: opacity .15s, background-color .15s; }
-  [class*="stream-container"]:has(> .dxd-stream), a[class*="stream-"]:has(> .dxd-stream) { position: relative; }
-  [data-dxv]:has(> .dxd-stream) > .dxv-row { padding-right: 3rem; }
+  .dx-has-dl { position: relative; }
+  [data-dxv].dx-has-dl > .dxv-row { padding-right: 3rem; }
   [class*="stream-container"]:hover > .dxd-stream, a[class*="stream-"]:hover > .dxd-stream, .dxd-stream:focus-visible, .dxd-is-picking .dxd-stream { opacity: 1; }
   .dxd-is-picking .dxd-stream { background: var(--dx-accent, #e50914); }
   .dxd-stream:hover { background: rgba(255,255,255,.22); }

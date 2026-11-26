@@ -429,18 +429,28 @@
   function ensureSettingsEntry() {
     if (!/^#\/settings/.test(location.hash)) return;
     // also in Settings' own list (General, Interface… Shortcuts), where people look for it
-    const shortcuts = document.querySelector('[class*="settings-container"] [data-section="shortcuts"], [class*="settings-content"] [data-section="shortcuts"]');
+    // (Stremio's settings from November 2026: a nav menu of groups with item links, no data-section)
+    const menuItems = [...document.querySelectorAll('[class*="settings-content"] nav[class*="menu-"] [class*="group-"] > a[class*="item-"]')];
+    const shortcuts = document.querySelector('[class*="settings-container"] [data-section="shortcuts"], [class*="settings-content"] [data-section="shortcuts"]')
+      || menuItems.find((a) => /^shortcuts$/i.test(a.textContent.trim())) || menuItems[menuItems.length - 1];
     if (shortcuts && !shortcuts.parentElement.querySelector(".dxtv-side")) {
-      const side = document.createElement("div");
-      side.className = `${shortcuts.className} dxtv-side`;
+      const side = document.createElement(shortcuts.tagName === "A" ? "a" : "div");
+      side.className = `${String(shortcuts.className).replace(/\S*selected\S*/g, "")} dxtv-side`;
       side.tabIndex = 0;
       side.title = "dx.bi";
-      side.textContent = "dx.bi";
+      const label = shortcuts.querySelector('[class*="item-label"]');
+      if (label) {
+        const l = document.createElement("div");
+        l.className = label.className;
+        l.textContent = "dx.bi";
+        side.append(l);
+      } else side.textContent = "dx.bi";
       side.addEventListener("click", settingsSheet);
       side.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); settingsSheet(); } });
       shortcuts.after(side);
     }
-    const content = document.querySelector('[class*="settings-content"] [class*="sections-container"]');
+    const content = document.querySelector('[class*="settings-content"] [class*="sections-container"]')
+      || document.querySelector('[class*="settings-content"] [class*="pane-"] [class*="page-container"] > [class*="page-"]');
     if (!content || content.querySelector(".dxtv-settings-entry")) return;
     ensureStyle();
     const entry = document.createElement("button");
@@ -467,7 +477,9 @@
     support.className = "dxtv-row dxtv-settings-entry";
     support.innerHTML = `<span>Support dx.bi<small>dx.bi is free. If you enjoy it, you can buy its developer a coffee</small></span><b>Open</b>`;
     support.addEventListener("click", donate);
-    content.prepend(entry, who, layout, server, problem, support);
+    const head = content.querySelector(':scope > [class*="head-"]');
+    if (head) head.after(entry, who, layout, server, problem, support);
+    else content.prepend(entry, who, layout, server, problem, support);
   }
 
   // ---------------------------------------------------------------------------
@@ -1157,6 +1169,25 @@
     if (/^#\/player\//.test(location.hash)) startHandoff();
     if (/^#\/search\?search=./.test(location.hash) && document.activeElement && document.activeElement.tagName !== "INPUT") resultsFirst();
   }
+
+  // Settings: Left from a page goes to its menu. The remote moves to the nearest thing that way, and
+  // the menu sits so far left that a page's own controls (the zoom slider) always won
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" || !/^#\/settings/.test(location.hash)) return;
+    const f = document.activeElement;
+    if (!f || !f.closest('[class*="settings-content"] [class*="pane-"]')) return;
+    if (f.matches('input[type="range"], input[type="text"], input[type="search"], textarea, [role="slider"]')) return;
+    // (a row of buttons side by side still moves along the row: only the leftmost goes to the menu)
+    const r = f.getBoundingClientRect();
+    const row = f.parentElement ? [...f.parentElement.querySelectorAll('a, button, [tabindex="0"]')] : [];
+    if (row.some((n) => n !== f && Math.abs(n.getBoundingClientRect().top - r.top) < 4 && n.getBoundingClientRect().right <= r.left + 2)) return;
+    const menu = document.querySelector('[class*="settings-content"] nav[class*="menu-"]');
+    const target = menu && (menu.querySelector('a[class*="selected"]') || menu.querySelector('a[class*="item-"]'));
+    if (!target) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    target.focus({ preventScroll: false });
+  }, true);
 
   window.addEventListener("hashchange", onRoute);
   const start = () => {
