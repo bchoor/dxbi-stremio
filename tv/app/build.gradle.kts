@@ -139,6 +139,11 @@ androidComponents {
     // (the preview build is the phone app's)
     beforeVariants(selector().withFlavor("device" to "tv").withBuildType("preview")) { it.enable = false }
     beforeVariants(selector().withFlavor("device" to "marquee").withBuildType("preview")) { it.enable = false }
+    // Marquee's release is for 32-bit ARM TVs (the Bravia), and it plays only links that are ready to stream,
+    // so it ships neither the 64-bit native code nor the torrent engine (18.4 MB -> about 5.7 MB)
+    onVariants(selector().withFlavor("device" to "marquee").withBuildType("release")) { variant ->
+        variant.packaging.jniLibs.excludes.addAll(listOf("lib/arm64-v8a/**", "lib/x86/**", "lib/x86_64/**", "**/libtorrent4j*.so"))
+    }
 }
 
 val copyPlugin by tasks.registering(Copy::class) {
