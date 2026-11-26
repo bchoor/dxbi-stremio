@@ -807,6 +807,8 @@
       next: nextLink(state) ? { title: nextTitle(state.nextVideo), thumbnail: state.nextVideo.thumbnail || "" } : null,
       upNext: (dx && dx.settings && dx.settings.upNext) || "10",
       audioLanguage: profile.audioLanguage || "",
+      // Which source this is, so the player can start it in the audio track picked last time
+      sourceKey: stream.infoHash ? `${stream.infoHash}/${Number.isInteger(stream.fileIdx) ? stream.fileIdx : -1}` : String((stream.behaviorHints && stream.behaviorHints.filename) || (url || "").split("?")[0]),
       // (empty: subtitles start off)
       subtitleLanguage,
       // Stremio's subtitle settings (Settings → Player), drawn the same way by the native player

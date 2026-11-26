@@ -339,6 +339,7 @@ class PlayerControls(
                     .setTrackTypeDisabled(type, false)
                     .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, i))
                     .build()
+                if (type == C.TRACK_TYPE_AUDIO) AudioMemory.save(activity, activity.sourceKey, format)
             }
         }
         if (number == 0 && type == C.TRACK_TYPE_AUDIO) row("No other audio", false) {}

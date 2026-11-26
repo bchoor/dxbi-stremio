@@ -144,6 +144,10 @@ class PlayerActivity : AppCompatActivity() {
     private var closed = false
     private var lastError: String? = null
     private var lastText: List<String?> = emptyList()
+    /** Which source is playing (the page's sourceKey), for the audio track picked last time */
+    var sourceKey = ""
+        private set
+    private var audioRestored = false
 
     private val reportProgress = object : Runnable {
         override fun run() {
@@ -240,6 +244,7 @@ class PlayerActivity : AppCompatActivity() {
         stream.optJSONObject("subtitleStyle")?.let { styleSubtitles(it) }
 
         val url = stream.optString("url")
+        sourceKey = stream.optString("sourceKey").ifEmpty { url.substringBefore('?') }
         if (url.isEmpty()) {
             finishWith(error = "no stream address")
             return
@@ -336,6 +341,10 @@ class PlayerActivity : AppCompatActivity() {
             // A subtitle switched on mid-line only shows from its next line: a seek to where we are
             // brings the current one up straight away
             override fun onTracksChanged(tracks: Tracks) {
+                if (!audioRestored && tracks.groups.any { it.type == C.TRACK_TYPE_AUDIO }) {
+                    audioRestored = true
+                    AudioMemory.restore(this@PlayerActivity, sourceKey, exo, tracks)
+                }
                 val text = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }.flatMap { g -> (0 until g.length).filter { g.isTrackSelected(it) }.map { i -> g.getTrackFormat(i).id } }
                 if (text.isNotEmpty() && text != lastText) exo.seekTo(exo.currentPosition)
                 lastText = text
@@ -398,12 +407,11 @@ class PlayerActivity : AppCompatActivity() {
                 when (event.keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> { seek(-1); return true }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> { seek(+1); return true }
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                        exo.playWhenReady = !exo.playWhenReady
-                        controls.show()
-                        return true
-                    }
-                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { controls.show(); return true }
+                    // OK brings the controls up (pause from their play button, or the remote's play/pause key)
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { controls.show(); return true }
+                    // Up/Down jump 5 minutes
+                    KeyEvent.KEYCODE_DPAD_UP -> { seek(+1, BIG_SEEK_MS); return true }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> { seek(-1, BIG_SEEK_MS); return true }
                 }
             }
         }
@@ -509,10 +517,15 @@ class PlayerActivity : AppCompatActivity() {
         playerView.requestFocus()
     }
 
-    private fun seek(direction: Int) {
+    private fun seek(direction: Int): Unit = seek(direction, SEEK_STEP_MS)
+
+    private fun seek(direction: Int, stepMs: Long) {
         val exo = player ?: return
-        if (direction > 0) exo.seekForward() else exo.seekBack()
-        seekFlash.text = if (direction > 0) "+10 s   ${clock(exo.currentPosition)}" else "−10 s   ${clock(exo.currentPosition)}"
+        val duration = exo.duration.takeIf { it != C.TIME_UNSET }
+        val target = (exo.currentPosition + direction * stepMs).coerceAtLeast(0L).let { if (duration != null) it.coerceAtMost(duration) else it }
+        exo.seekTo(target)
+        val step = if (stepMs >= 60_000L) "${stepMs / 60_000L} min" else "${stepMs / 1000L} s"
+        seekFlash.text = if (direction > 0) "+$step   ${clock(target)}" else "−$step   ${clock(target)}"
         seekFlash.visibility = View.VISIBLE
         handler.removeCallbacks(hideFlash)
         handler.postDelayed(hideFlash, 900)
@@ -727,5 +740,6 @@ class PlayerActivity : AppCompatActivity() {
         const val EXTRA_STREAM = "stream"
         private const val PROGRESS_INTERVAL_MS = 5000L
         private const val SEEK_STEP_MS = 10_000L
+        private const val BIG_SEEK_MS = 300_000L
     }
 }
