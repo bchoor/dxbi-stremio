@@ -138,8 +138,9 @@
     quickPlayQuality: "best",
     quickPlayFallback: "best",
     streamRows: true,
-    streamPicture: "hdr",
-    streamSound: "any",
+    // (this fork: the TV decodes Dolby Vision, and the soundbar on ARC takes Dolby but not DTS)
+    streamPicture: "dv",
+    streamSound: "dolby",
     watchedTitles: "show",
     librarySort: true,
     convertVideo: "auto",
@@ -4164,7 +4165,10 @@
     else if (atmos) audio = "DD+";
     if (atmos && audio) audio += " Atmos";
 
-    return { provider, site, codec, audio, instant, pending, lesser, res, hdr, dv, size, seeds, source, langs: [...langs] };
+    // IMAX editions (the taller picture in the IMAX scenes), as release names mark them
+    const imax = /\bimax\b/i.test(all);
+
+    return { provider, site, codec, audio, imax, instant, pending, lesser, res, hdr, dv, size, seeds, source, langs: [...langs] };
   }
 
   // ---------------------------------------------------------------------------
@@ -4279,14 +4283,16 @@
     // Ready-to-play first. HDR beats Dolby Vision, which stalls on some decoders, and an encode
     // beats a huge remux: the pick has to start and keep playing.
     rank(d) {
-      return (d.instant ? 1e5 : 0) + d.res * 10 + this.picture(d) + (this.SOURCE[d.source] || 0) + this.sound(d) - (d.lesser ? 15000 : 0);
+      // resolution, then picture (DV/HDR), then sound, then the kind of source: sound is weighed
+      // above the source, so a Dolby web copy leads a DTS remux of the same picture (DTS stays listed)
+      return (d.instant ? 1e5 : 0) + d.res * 10 + this.picture(d) * 20 + this.sound(d) * 4 + (this.SOURCE[d.source] || 0) - (d.lesser ? 15000 : 0);
     },
     // (settings may not be loaded where this runs on its own, as in tools/quick-play-test.mjs)
     picture(d) {
       const dvFirst = typeof settings !== "undefined" && settings.streamPicture === "dv";
       return d.dv ? (dvFirst ? 3 : 1) : d.hdr ? 2 : 0;
     },
-    // under 1, so sound only orders streams that are otherwise alike
+    // (times 4 in rank(): the gap from DD+ Atmos to DTS outweighs any difference in source)
     SOUND: { "DD+ Atmos": 0.9, "TrueHD Atmos": 0.7, "DD+": 0.8, DD: 0.6, TrueHD: 0.5, FLAC: 0.4, AAC: 0.3, "": 0.2, "DTS-HD": 0.1, DTS: 0.1, "DTS-HD Atmos": 0.1, "DTS Atmos": 0.1 },
     sound(d) {
       if (typeof settings === "undefined" || settings.streamSound !== "dolby") return 0;
@@ -4460,7 +4466,7 @@
     },
 
     score(d) {
-      return d.res * 10 + (d.dv ? 3 : d.hdr ? 2 : 0) + (SOURCE_RANK[d.source] || 0) + streamChoice.sound(d);
+      return d.res * 10 + streamChoice.picture(d) * 20 + streamChoice.sound(d) * 4 + (SOURCE_RANK[d.source] || 0);
     },
 
     apply(list, rows, bar) {
@@ -15198,7 +15204,7 @@
       const facts = [d.provider, d.site, seeds, this.size(d.size), ...d.langs.filter((l) => l !== NOT_LISTED).slice(0, 2)].filter(Boolean);
       const state = d.instant ? ["is-ready", "Ready"] : d.pending ? ["is-wait", "Download"] : null;
       return `<span class="dxv-q"><b>${esc(QUALITY_LABEL[d.res])}</b>${d.dv || d.hdr ? `<i>${d.dv ? "Dolby Vision" : "HDR"}</i>` : ""}</span>
-        <span class="dxv-main"><em class="dxv-best">Best match</em><span class="dxv-top"><strong>${esc([this.SOURCES[d.source], d.codec, d.audio].filter(Boolean).join(" · "))}</strong>${state ? `<span class="dxv-state ${state[0]}">${esc(state[1])}</span>` : ""}</span><small>${esc(facts.join(" · "))}</small>${file ? `<u>${esc(file)}</u>` : ""}</span>`;
+        <span class="dxv-main"><em class="dxv-best">Best match</em><span class="dxv-top"><strong>${esc([d.imax ? "IMAX" : "", this.SOURCES[d.source], d.codec, d.audio].filter(Boolean).join(" · "))}</strong>${state ? `<span class="dxv-state ${state[0]}">${esc(state[1])}</span>` : ""}</span><small>${esc(facts.join(" · "))}</small>${file ? `<u>${esc(file)}</u>` : ""}</span>`;
     },
 
     waiting: () => settings.streamRows && dpage.streamItems().some((el) => !el.hasAttribute("data-dxv")),
