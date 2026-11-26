@@ -156,6 +156,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var seekFlash: TextView
     private lateinit var loading: View
     private lateinit var loadingWords: TextView
+    @Volatile private var busyUntil = 0L
     private var player: ExoPlayer? = null
     private val handler = Handler(Looper.getMainLooper())
     private var closed = false
@@ -200,6 +201,8 @@ class PlayerActivity : AppCompatActivity() {
             val spin = !torrent && waiting && (waited >= 1 || !everReady)
             loading.visibility = if (spin) View.VISIBLE else View.GONE
             loadingWords.text = when {
+                now < busyUntil -> "The source is busy · trying again…"
+                waited >= 45 -> "This source isn't starting · Back to pick another"
                 waited >= 12 -> "Still loading · Back tries another source"
                 waited >= 4 -> if (everReady) "Catching up…" else "Starting…"
                 else -> ""
@@ -270,8 +273,9 @@ class PlayerActivity : AppCompatActivity() {
                 }, android.widget.LinearLayout.LayoutParams((52 * d).toInt(), (52 * d).toInt()))
                 addView(loadingWords)
             }
+            loadingWords.layoutParams = android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.MATCH_PARENT, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
             (seekFlash.parent as android.view.ViewGroup).addView(loading, android.widget.FrameLayout.LayoutParams(
-                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER))
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER))
         }
         skipButton = findViewById(R.id.skip_button)
         skipButton.setOnClickListener { doSkip() }
@@ -326,6 +330,21 @@ class PlayerActivity : AppCompatActivity() {
             .setUserAgent(if (ownAgent) null else "dxbi-tv/${BuildConfigVersion.name(this)}")
             .setDefaultRequestProperties(headers)
         val dataSource = extras?.dataSource(online) ?: online
+        // A host that answers 429 (too many requests: Real-Debrid when it's busy) is asked again
+        // after 2, 4, 8 and 16 s, and said so on screen; after that the error shows instead of a
+        // spinner that never ends
+        val errors = object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
+            override fun getRetryDelayMsFor(info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+                val code = (info.exception as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
+                if (code == 429) {
+                    busyUntil = android.os.SystemClock.elapsedRealtime() + 20_000
+                    return if (info.errorCount <= 4) 2000L shl (info.errorCount - 1) else C.TIME_UNSET
+                }
+                if (code != null && code in 400..499) return C.TIME_UNSET // a refused link won't start working by waiting
+                return super.getRetryDelayMsFor(info)
+            }
+            override fun getMinimumLoadableRetryCount(dataType: Int) = 5
+        }
 
         // The TV's own decoders first, falling back to software ones when a format isn't supported
         val renderers = Renderers()
@@ -333,7 +352,7 @@ class PlayerActivity : AppCompatActivity() {
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
 
         val exo = ExoPlayer.Builder(this, renderers)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource).setLoadErrorHandlingPolicy(errors))
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .setSeekBackIncrementMs(SEEK_STEP_MS)
@@ -397,7 +416,7 @@ class PlayerActivity : AppCompatActivity() {
         val audioUrl = stream.optString("audioUrl")
         if (audioUrl.isNotEmpty()) {
             // picture and sound from separate addresses (YouTube trailers), played together
-            val factory = DefaultMediaSourceFactory(dataSource)
+            val factory = DefaultMediaSourceFactory(dataSource).setLoadErrorHandlingPolicy(errors)
             exo.setMediaSource(androidx.media3.exoplayer.source.MergingMediaSource(
                 factory.createMediaSource(item), factory.createMediaSource(MediaItem.fromUri(Uri.parse(audioUrl)))), startMs)
         } else exo.setMediaItem(item, startMs)
