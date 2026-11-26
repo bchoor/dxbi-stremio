@@ -2569,8 +2569,9 @@
       // so the DOM order isn't what's on screen and stepping by it skipped rows
       // (a sorted stream list runs across the addon groups as one list: step through all its rows)
       const streamList = focused.matches(dpage.ITEM) && focused.closest(".dx-sorted");
-      const items = (streamList ? dpage.streamItems(streamList) : [...parent.children])
-        .filter((n) => n.checkVisibility())
+      // (a stream row hidden by a filter carries data-dx-hide: reading that is free, while
+      // checkVisibility() on every one of hundreds of rows cost a style pass on each key press)
+      const items = (streamList ? dpage.streamItems(streamList).filter((n) => !n.hasAttribute("data-dx-hide")) : [...parent.children].filter((n) => n.checkVisibility()))
         .map((n, idx) => [n, idx, Number(n.style.order) || 0])
         .sort((x, y) => x[2] - y[2] || x[1] - y[1])
         .map((x) => x[0]);
@@ -4385,6 +4386,22 @@
       if (this.lastList === list && this.lastKey === key && this.lastFirst === items[0] && this.lastLast === items[items.length - 1]) return;
       const rows = items.map((el) => [el, this.data(el)]);
       this.apply(list, rows, bar);
+      // TV: a new list starts with the remote on its top source (the best match), not on the
+      // filters above it; once only, and not if the remote is already somewhere in the list or bar
+      if (IN_TV && this.focusedList !== list) {
+        const at = document.activeElement;
+        if (!at || at === document.body || !(list.contains(at) || bar.contains(at) || at.closest("input, textarea"))) {
+          const first = items
+            .filter((el) => !el.hasAttribute("data-dx-hide"))
+            .map((el, i) => [el, i, Number(el.style.order) || 0])
+            .sort((x, y) => x[2] - y[2] || x[1] - y[1])[0];
+          if (first) {
+            this.focusedList = list;
+            if (first[0].tabIndex < 0) first[0].tabIndex = 0;
+            first[0].focus({ preventScroll: true });
+          }
+        } else this.focusedList = list;
+      }
       this.lastList = list; this.lastKey = key; this.lastFirst = items[0]; this.lastLast = items[items.length - 1];
     },
 
@@ -4530,7 +4547,20 @@
           `<button type="button" class="dx-sb-opt${o.on ? " is-on" : ""}" data-val="${esc(o.v)}"><span class="dx-sb-check">${o.on ? ICONS.check : ""}</span><span class="dx-sb-label">${esc(o.l)}</span>${o.n ? `<span class="dx-sb-n">${o.n}</span>` : ""}</button>`
         ).join("") + `</div>`;
       }
+      // Rebuilding the bar replaced the button the remote was on, and the selection was lost
+      // (Up/Down then did nothing): keep it on the same button, or on what the tap opened
+      const was = bar.contains(document.activeElement) ? document.activeElement : null;
+      const id = was && ["menu", "toggle", "val", "act"].map((k) => was.dataset[k] !== undefined ? `[data-${k}="${CSS.escape(was.dataset[k])}"]` : "").find(Boolean);
       bar.innerHTML = html;
+      if (was) {
+        const menu = this.open && bar.querySelector(".dx-sb-menu");
+        const opened = menu && was.dataset.menu === this.open;
+        const next = (opened && (menu.querySelector(".dx-sb-opt.is-on") || menu.querySelector(".dx-sb-opt"))) ||
+          (id && bar.querySelector(id)) ||
+          (was.dataset.val !== undefined && !this.open && bar.querySelector(`[data-menu="${CSS.escape(was.closest?.(".dx-sb-menu")?.dataset.for || "")}"]`)) ||
+          bar.querySelector(".dx-sb-btn");
+        if (next) next.focus({ preventScroll: true });
+      }
     },
 
     onClick(e) {
