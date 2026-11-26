@@ -83,6 +83,7 @@ data class Item(
     val progress: Float = 0f,
     val videoId: String = "",
     val subtitle: String = "",
+    val rating: String = "",
 ) {
     companion object {
         fun from(m: JSONObject) = Item(
@@ -93,6 +94,7 @@ data class Item(
             background = m.optString("background"),
             description = m.optString("description"),
             year = m.optString("releaseInfo", m.optString("year")),
+            rating = m.optString("imdbRating").takeIf { it.isNotEmpty() && it != "null" }.orEmpty(),
         )
     }
 }

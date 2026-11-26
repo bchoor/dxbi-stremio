@@ -73,7 +73,8 @@ object Session {
 class CardsAdapter(private val items: List<Item>, private val wide: Boolean, private val onFocus: (Item) -> Unit, private val onOpen: (Item) -> Unit) :
     RecyclerView.Adapter<CardsAdapter.Holder>() {
 
-    class Holder(val card: FrameLayout, val image: ImageView, val title: android.widget.TextView, val sub: android.widget.TextView?, val bar: View?) : RecyclerView.ViewHolder(card)
+    class Holder(view: View, val card: FrameLayout, val image: ImageView, val title: android.widget.TextView, val sub: android.widget.TextView?, val bar: View?,
+                 val year: android.widget.TextView?, val rating: android.widget.TextView?) : RecyclerView.ViewHolder(view)
 
     override fun getItemCount() = items.size
     override fun getItemViewType(position: Int) = if (wide) 1 else 0
@@ -83,7 +84,7 @@ class CardsAdapter(private val items: List<Item>, private val wide: Boolean, pri
         val w = ctx.dp(if (wide) 200 else 112)
         val h = ctx.dp(if (wide) 112 else 168)
         val card = FrameLayout(ctx).apply {
-            layoutParams = RecyclerView.LayoutParams(w, h).apply { marginEnd = ctx.dp(12) }
+            layoutParams = if (wide) RecyclerView.LayoutParams(w, h).apply { marginEnd = ctx.dp(12) } else LinearLayout.LayoutParams(w, h)
             background = round(Ui.SURFACE_2, 8, ctx)
             foreground = icon(ctx, com.notdxbi.dxbi.tv.R.drawable.mq_focus)
             clipToOutline = true
@@ -111,7 +112,21 @@ class CardsAdapter(private val items: List<Item>, private val wide: Boolean, pri
             bar = View(ctx).apply { setBackgroundColor(Ui.ACCENT) }
             card.addView(bar, FrameLayout.LayoutParams(0, ctx.dp(3), Gravity.BOTTOM))
         }
-        return Holder(card, image, title, sub, bar)
+        if (wide) return Holder(card, card, image, title, sub, bar, null, null)
+        // posters: the year on the left under the picture, the IMDb rating on the right
+        val box = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            layoutParams = RecyclerView.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = ctx.dp(12) }
+        }
+        box.addView(card)
+        val info = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(ctx.dp(2), ctx.dp(7), ctx.dp(2), 0) }
+        val year = ctx.label("", 11f, Ui.MUTED)
+        info.addView(year, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val rating = ctx.label("", 11f, Ui.ACCENT, bold = true)
+        info.addView(rating)
+        box.addView(info, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        return Holder(box, card, image, title, sub, bar, year, rating)
     }
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
@@ -125,6 +140,8 @@ class CardsAdapter(private val items: List<Item>, private val wide: Boolean, pri
             holder.image.load(backdropFor(item))
         } else {
             holder.image.load(item.poster.ifEmpty { null })
+            holder.year?.text = item.year
+            holder.rating?.text = if (item.rating.isEmpty()) "" else "★ ${item.rating}"
         }
         holder.card.setOnClickListener { onOpen(item) }
         holder.card.setOnFocusChangeListener { v, has ->
