@@ -35,6 +35,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  */
 class HomeActivity : AppCompatActivity() {
     private lateinit var backdrop: ImageView
+    private lateinit var exitNote: android.widget.TextView
+    private val hideExit = Runnable { exitNote.animate().alpha(0f).setDuration(200).withEndAction { exitNote.visibility = View.GONE }.start() }
     private lateinit var heroTitle: TextView
     private lateinit var heroMeta: TextView
     private lateinit var heroText: TextView
@@ -93,13 +95,35 @@ class HomeActivity : AppCompatActivity() {
         root.addView(rail, FrameLayout.LayoutParams(dp(RAIL_SHUT), FrameLayout.LayoutParams.MATCH_PARENT, Gravity.START))
         // the animated splash covers Home until its first row is in
         if (savedInstanceState == null && Api.authKey != null) splash = Splash(this).also { root.addView(it.view, match()); it.start() }
+        // "Press Back again to exit": shows after Back from the open menu
+        exitNote = label("Press Back again to exit Marquee", 16f, Ui.TEXT, bold = true).apply {
+            background = round(0xF2141A36.toInt(), 24, this@HomeActivity, 1, Ui.ACCENT)
+            setPadding(dp(26), dp(14), dp(26), dp(14))
+            visibility = View.GONE
+            elevation = dp(12).toFloat()
+        }
+        root.addView(exitNote, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(56) })
         setContentView(root)
 
         root.viewTreeObserver.addOnGlobalFocusChangeListener { _, now -> openRail(now != null && inside(rail, now)) }
         // Back: first to the menu (as Netflix does), then out of the app
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (railOpen) finish() else railItems.firstOrNull { it.first == page }?.second?.requestFocus()
+                when {
+                    !railOpen -> railItems.firstOrNull { it.first == page }?.second?.requestFocus()
+                    exitNote.visibility == View.VISIBLE -> {
+                        // a clean close: the next launch starts fresh
+                        finishAffinity()
+                        exitNote.postDelayed({ android.os.Process.killProcess(android.os.Process.myPid()) }, 300)
+                    }
+                    else -> {
+                        exitNote.alpha = 0f
+                        exitNote.visibility = View.VISIBLE
+                        exitNote.animate().alpha(1f).setDuration(150).start()
+                        exitNote.removeCallbacks(hideExit)
+                        exitNote.postDelayed(hideExit, 3_000)
+                    }
+                }
             }
         })
     }
