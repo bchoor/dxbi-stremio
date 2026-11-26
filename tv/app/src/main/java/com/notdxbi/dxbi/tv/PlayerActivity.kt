@@ -121,6 +121,20 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private inner class Renderers : DefaultRenderersFactory(this) {
+        // The TV's own DTS decoder (MediaTek's DSP) gives out stereo only, so a 5.1/7.1 DTS track
+        // reached the Dolby Digital encoder as 2 channels. DTS and TrueHD go to FFmpeg instead,
+        // which keeps every channel.
+        init {
+            setMediaCodecSelector { mime, secure, tunneling ->
+                when (mime) {
+                    androidx.media3.common.MimeTypes.AUDIO_DTS, androidx.media3.common.MimeTypes.AUDIO_DTS_HD,
+                    androidx.media3.common.MimeTypes.AUDIO_DTS_EXPRESS, androidx.media3.common.MimeTypes.AUDIO_DTS_X,
+                    androidx.media3.common.MimeTypes.AUDIO_TRUEHD -> emptyList()
+                    else -> androidx.media3.exoplayer.mediacodec.MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling)
+                }
+            }
+        }
+
         override fun buildTextRenderers(context: android.content.Context, output: TextOutput, outputLooper: Looper, extensionRendererMode: Int, out: ArrayList<Renderer>) {
             val own = ArrayList<Renderer>()
             super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, own)
