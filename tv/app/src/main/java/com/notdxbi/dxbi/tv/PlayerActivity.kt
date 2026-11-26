@@ -241,6 +241,11 @@ class PlayerActivity : AppCompatActivity() {
                 else -> stage
             }.trim()
             loadingWords.visibility = if (loadingWords.text.isEmpty()) View.GONE else View.VISIBLE
+            // never ready and nothing received in 90 s: it isn't coming, say so instead of spinning on
+            if (!torrent && !everReady && waited >= 90 && bytesIn.get() == 0L && !closed) {
+                finishWith(error = "The source didn't send anything in 90 s. Pick another source.")
+                return
+            }
             if (text != null) {
                 seekFlash.text = text
                 seekFlash.visibility = View.VISIBLE
