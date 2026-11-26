@@ -59,7 +59,8 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var controls: Controls
     private var extras: PlayerHooks? = null
     // the subtitles' size (Stremio's setting), put back after the phone app's small window's bigger one
-    private var subtitleSize = SubtitleView.DEFAULT_TEXT_SIZE_FRACTION
+    // a little under Media3's 5.33% of the screen's height, the size TV players use
+    private var subtitleSize = 0.045f
     private lateinit var zoom: PictureZoom
     private var party = false
     private val partyTick = object : Runnable {
@@ -139,6 +140,8 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var clock: TextView
     private var showClock = true
     private lateinit var seekFlash: TextView
+    private lateinit var loading: View
+    private lateinit var loadingWords: TextView
     private var player: ExoPlayer? = null
     private val handler = Handler(Looper.getMainLooper())
     private var closed = false
@@ -178,9 +181,16 @@ class PlayerActivity : AppCompatActivity() {
             val now = android.os.SystemClock.elapsedRealtime()
             if (!waiting) waitingSince = 0L else if (waitingSince == 0L) waitingSince = now
             val waited = if (waitingSince > 0L) (now - waitingSince) / 1000 else 0L
-            val text = if (torrent && waiting) TorrentEngine.status()
-                else if (waiting && waited >= 2) "${if (everReady) "Buffering" else "Starting the stream"} · $waited s"
-                else null
+            val text = if (torrent && waiting) TorrentEngine.status() else null
+            // any other stream: a quiet spinner in the middle, a word under it only when it's slow
+            val spin = !torrent && waiting && (waited >= 1 || !everReady)
+            loading.visibility = if (spin) View.VISIBLE else View.GONE
+            loadingWords.text = when {
+                waited >= 12 -> "Still loading · Back tries another source"
+                waited >= 4 -> if (everReady) "Catching up…" else "Starting…"
+                else -> ""
+            }
+            loadingWords.visibility = if (loadingWords.text.isEmpty()) View.GONE else View.VISIBLE
             if (text != null) {
                 seekFlash.text = text
                 seekFlash.visibility = View.VISIBLE
@@ -227,6 +237,28 @@ class PlayerActivity : AppCompatActivity() {
         playerView = findViewById(R.id.player_view)
         clock = findViewById(R.id.clock)
         seekFlash = findViewById(R.id.seek_flash)
+        run {
+            val d = resources.displayMetrics.density
+            loadingWords = TextView(this).apply {
+                setTextColor(0xCCFFFFFF.toInt()); textSize = 14f
+                gravity = android.view.Gravity.CENTER
+                setPadding(0, (14 * d).toInt(), 0, 0)
+                setShadowLayer(6f, 0f, 1f, Color.BLACK)
+            }
+            loading = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER
+                visibility = View.GONE
+                isClickable = false; isFocusable = false
+                addView(android.widget.ProgressBar(this@PlayerActivity).apply {
+                    isIndeterminate = true
+                    indeterminateTintList = android.content.res.ColorStateList.valueOf(0xE6FFFFFF.toInt())
+                }, android.widget.LinearLayout.LayoutParams((52 * d).toInt(), (52 * d).toInt()))
+                addView(loadingWords)
+            }
+            (seekFlash.parent as android.view.ViewGroup).addView(loading, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER))
+        }
         skipButton = findViewById(R.id.skip_button)
         skipButton.setOnClickListener { doSkip() }
 
@@ -632,6 +664,9 @@ class PlayerActivity : AppCompatActivity() {
         val subs = playerView.subtitleView ?: return
         val overlay = playerView.overlayFrameLayout ?: return
         val frame = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_content_frame) ?: return
+        subs.setFractionalTextSize(subtitleSize)
+        subs.setBottomPaddingFraction(0.05f)
+        subs.setApplyEmbeddedFontSizes(false)
         if (subs.parent !== overlay) {
             (subs.parent as? android.view.ViewGroup)?.removeView(subs)
             overlay.addView(subs, android.widget.FrameLayout.LayoutParams(0, 0))
@@ -649,11 +684,13 @@ class PlayerActivity : AppCompatActivity() {
             )
             if (shown.width() <= 0 || shown.height() <= 0 || shown == last) return@addOnPreDrawListener true
             last = shown
+            // across the picture's width, down to the bottom of the screen (into a film's black bar,
+            // as Netflix does), so lines sit low and the same size whatever the picture's shape
             subs.layoutParams = (subs.layoutParams as android.widget.FrameLayout.LayoutParams).apply {
                 width = shown.width()
-                height = shown.height()
+                height = playerView.height
                 leftMargin = shown.left
-                topMargin = shown.top
+                topMargin = 0
             }
             false // drawn on the next frame, at the new size
         }
